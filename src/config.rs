@@ -1,4 +1,8 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 use serde::Deserialize;
 
@@ -8,6 +12,7 @@ use crate::identity;
 #[serde(default)]
 pub struct RuntimeConfig {
     pub command: CommandConfig,
+    pub admin: AdminConfig,
 }
 
 impl RuntimeConfig {
@@ -28,8 +33,63 @@ impl RuntimeConfig {
         if config.command.prefix.trim().is_empty() {
             return Err(ConfigError::EmptyPrefix(path));
         }
+        if config.admin.bind.trim().is_empty() {
+            return Err(ConfigError::InvalidAdmin("bind cannot be empty".into()));
+        }
+        if config.admin.port > 65_526 {
+            return Err(ConfigError::InvalidAdmin(
+                "port must leave room for ten attempts".into(),
+            ));
+        }
 
         Ok(config)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct AdminConfig {
+    pub enabled: bool,
+    pub bind: String,
+    pub port: u16,
+    pub admin_ids: Vec<u64>,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: "0.0.0.0".into(),
+            port: 18_765,
+            admin_ids: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RuntimePolicy {
+    config: Arc<RwLock<RuntimeConfig>>,
+}
+
+impl RuntimePolicy {
+    pub fn new(config: RuntimeConfig) -> Self {
+        Self {
+            config: Arc::new(RwLock::new(config)),
+        }
+    }
+
+    pub fn snapshot(&self) -> RuntimeConfig {
+        self.config
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn replace(&self, config: RuntimeConfig) {
+        *self
+            .config
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = config;
     }
 }
 
@@ -74,6 +134,8 @@ pub enum ConfigError {
     },
     #[error("command prefix cannot be empty in {0}")]
     EmptyPrefix(std::path::PathBuf),
+    #[error("invalid admin configuration: {0}")]
+    InvalidAdmin(String),
 }
 
 #[cfg(test)]

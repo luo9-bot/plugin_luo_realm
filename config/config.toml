@@ -4,3 +4,9 @@ version_salt = "luo-realm-v1"
 [command]
 prefix_enabled = false
 prefix = "/lr"
+
+[admin]
+enabled = true
+bind = "0.0.0.0"
+port = 18765
+admin_ids = []
