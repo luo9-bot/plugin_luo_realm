@@ -84,12 +84,16 @@ async function download(path, fallbackName) {
 
 function requestAction({ title, message = '', confirmation = '', danger = false }) {
     const dialog = byId('actionDialog');
+    const confirmationInput = byId('actionConfirmation');
     dialog.returnValue = '';
     byId('actionTitle').textContent = title;
     byId('actionMessage').textContent = message;
     byId('actionReason').value = '';
-    byId('actionConfirmation').value = '';
-    byId('actionConfirmation').placeholder = confirmation;
+    confirmationInput.value = '';
+    confirmationInput.placeholder = confirmation;
+    confirmationInput.dataset.expected = confirmation;
+    confirmationInput.setCustomValidity('');
+    byId('confirmationLabel').textContent = confirmation ? `输入“${confirmation}”以确认` : '输入确认摘要';
     byId('confirmationField').classList.toggle('hidden', !confirmation);
     byId('actionSubmit').className = danger ? 'button danger' : 'button primary';
     dialog.showModal();
@@ -104,13 +108,20 @@ function requestAction({ title, message = '', confirmation = '', danger = false 
     });
 }
 
+function validateActionConfirmation() {
+    const confirmation = byId('actionConfirmation');
+    const expected = confirmation.dataset.expected || '';
+    const matches = !expected || confirmation.value.trim() === expected;
+    confirmation.setCustomValidity(matches ? '' : `请输入：${expected}`);
+    return matches;
+}
+
+byId('actionConfirmation').addEventListener('input', validateActionConfirmation);
+
 byId('actionForm').addEventListener('submit', event => {
     if (event.submitter?.value !== 'confirm') return;
     const reason = byId('actionReason');
-    const confirmation = byId('actionConfirmation');
-    const expected = confirmation.placeholder;
-    confirmation.setCustomValidity(expected && confirmation.value !== expected ? `请输入：${expected}` : '');
-    if (!reason.checkValidity() || !confirmation.checkValidity()) {
+    if (!reason.checkValidity() || !validateActionConfirmation()) {
         event.preventDefault();
         byId('actionForm').reportValidity();
     }
