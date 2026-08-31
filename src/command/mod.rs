@@ -5,7 +5,7 @@ use std::path::Path;
 use rusqlite::Transaction;
 
 use crate::{
-    config::CommandConfig,
+    config::{CommandConfig, GameplayConfig},
     core::{Combatant, Player, simulate_combat, stable_seed},
     database::{self, Database, DatabaseError},
     engine, identity, render,
@@ -32,6 +32,8 @@ enum Command {
     Profile,
     CheckIn,
     Event,
+    DailyState,
+    WorldEvent,
     Ranking,
     Rename,
     Duel,
@@ -48,6 +50,8 @@ impl Command {
             "状态" | "属性" | "profile" | "查询" => Some(Self::Profile),
             "签到" | "刻印" | "checkin" => Some(Self::CheckIn),
             "每日事件" | "事件" | "event" => Some(Self::Event),
+            "今日状态" | "每日状态" | "daily" => Some(Self::DailyState),
+            "世界事件" | "群事件" | "world" => Some(Self::WorldEvent),
             "排行" | "ranking" => Some(Self::Ranking),
             "改名" | "name" => Some(Self::Rename),
             "决斗" | "duel" => Some(Self::Duel),
@@ -65,7 +69,7 @@ impl Command {
 
     pub fn feature_code(self) -> &'static str {
         match self {
-            Self::Event => "event",
+            Self::Event | Self::WorldEvent => "event",
             Self::Duel => "combat",
             _ => "general",
         }
@@ -88,6 +92,7 @@ pub fn handle_message(
     user_id: u64,
     message: &str,
     command_config: &CommandConfig,
+    gameplay_config: &GameplayConfig,
 ) -> Result<Option<String>, DatabaseError> {
     let Some(text) = command_config.command_text(message) else {
         return Ok(None);
@@ -104,7 +109,16 @@ pub fn handle_message(
         return Ok(Some(message.into()));
     }
 
-    dispatch(command, &arguments[1..], database, root, group_id, user_id).map(Some)
+    dispatch(
+        command,
+        &arguments[1..],
+        database,
+        root,
+        group_id,
+        user_id,
+        gameplay_config,
+    )
+    .map(Some)
 }
 
 fn denied_message(
@@ -130,10 +144,11 @@ fn dispatch(
     root: &Path,
     group_id: u64,
     user_id: u64,
+    gameplay_config: &GameplayConfig,
 ) -> Result<String, DatabaseError> {
     match command {
         Command::Menu => Ok(format!(
-            "{}：注册 / 体系 / 选择体系 / 签到 / 状态 / 战力 / 每日事件 / 决斗 / 排行 / 改名",
+            "{}：注册 / 体系 / 选择体系 / 签到 / 状态 / 今日状态 / 战力 / 每日事件 / 世界事件 / 决斗 / 排行 / 改名",
             identity::PRODUCT_NAME
         )),
         Command::Systems => Ok(format!("可选修行体系：{}", registration::system_catalog())),
@@ -142,10 +157,19 @@ fn dispatch(
         Command::Rename => registration::rename(database, user_id, arguments),
         Command::Power => power(database, user_id),
         Command::Profile => profile(database, root, user_id),
-        Command::CheckIn => check_in(database, user_id),
+        Command::CheckIn => check_in(database, group_id, user_id),
         Command::Event => event(database, group_id, user_id),
-        Command::Ranking => ranking(database),
-        Command::Duel => duel(database, root, group_id, user_id, arguments),
+        Command::DailyState => daily_state(database, user_id),
+        Command::WorldEvent => world_event(database, group_id, user_id),
+        Command::Ranking => ranking(database, user_id),
+        Command::Duel => duel(
+            database,
+            root,
+            group_id,
+            user_id,
+            arguments,
+            gameplay_config,
+        ),
     }
 }
 
@@ -160,12 +184,14 @@ fn power(database: &mut Database, user_id: u64) -> Result<String, DatabaseError>
     let transaction = database.immediate_transaction()?;
     let player = active_player(&transaction, user_id)?;
     let cultivation = database::cultivation::get(&transaction, user_id)?;
+    let daily_state = database::daily_state::get_or_create(&transaction, user_id, &date)?;
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
-    let profile = engine::build_combat_profile(
+    let profile = engine::build_combat_profile_with_state(
         &player,
         &cultivation.system_id,
         cultivation.realm_index,
         &date,
+        Some(&daily_state),
     );
     let system = engine::find_system(&cultivation.system_id)
         .ok_or_else(|| DatabaseError::InvalidData("unknown player cultivation system".into()))?;
@@ -175,10 +201,11 @@ fn power(database: &mut Database, user_id: u64) -> Result<String, DatabaseError>
         .map(|realm| realm.name)
         .unwrap_or("未知境界");
     Ok(format!(
-        "当前战力：{:.0}（{}·{}）",
+        "当前战力：{:.0}（{}·{}）\n今日状态：{}",
         profile.power,
         system.name(),
-        realm
+        realm,
+        daily_state.name,
     ))
 }
 
@@ -187,6 +214,7 @@ fn profile(database: &mut Database, root: &Path, user_id: u64) -> Result<String,
     let transaction = database.immediate_transaction()?;
     let player = active_player(&transaction, user_id)?;
     let cultivation = database::cultivation::get(&transaction, user_id)?;
+    let daily_state = database::daily_state::get_or_create(&transaction, user_id, &date)?;
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
     let system = engine::find_system(&cultivation.system_id)
         .ok_or_else(|| DatabaseError::InvalidData("unknown player cultivation system".into()))?;
@@ -195,28 +223,30 @@ fn profile(database: &mut Database, root: &Path, user_id: u64) -> Result<String,
         .get(cultivation.realm_index as usize)
         .map(|realm| realm.name)
         .unwrap_or("未知境界");
-    let combat_profile = engine::build_combat_profile(
+    let combat_profile = engine::build_combat_profile_with_state(
         &player,
         &cultivation.system_id,
         cultivation.realm_index,
         &date,
+        Some(&daily_state),
     );
     let image = root
         .join(identity::DATA_DIRECTORY)
         .join("cards")
         .join(format!("{user_id}.png"));
     let summary = format!(
-        "{} · {}·{}\n等级 {} 修为 {} 战力 {:.0}\nHP {} 攻击 {} 防御 {} 速度 {}\n金币 {} 刻印 {} 胜/负 {}/{}",
+        "{} · {}·{}\n今日状态：{}\n等级 {} 修为 {} 战力 {:.0}\nHP {} 攻击 {} 防御 {} 速度 {}\n金币 {} 刻印 {} 胜/负 {}/{}",
         player.display_name,
         system.name(),
         realm_name,
+        daily_state.name,
         player.level,
         cultivation.progress,
         combat_profile.power,
-        player.base_hp,
-        player.base_attack,
-        player.base_defense,
-        player.speed,
+        combat_profile.player.base_hp,
+        combat_profile.player.base_attack,
+        combat_profile.player.base_defense,
+        combat_profile.player.speed,
         player.coins,
         player.marks,
         player.wins,
@@ -240,10 +270,11 @@ fn profile(database: &mut Database, root: &Path, user_id: u64) -> Result<String,
     })
 }
 
-fn check_in(database: &mut Database, user_id: u64) -> Result<String, DatabaseError> {
+fn check_in(database: &mut Database, group_id: u64, user_id: u64) -> Result<String, DatabaseError> {
     let date = database.local_date()?;
     let transaction = database.immediate_transaction()?;
     active_player(&transaction, user_id)?;
+    database::daily_state::get_or_create(&transaction, user_id, &date)?;
     let result = database::activity::check_in(&transaction, user_id, &date)?;
     let reply = match result {
         database::activity::CheckInResult::Completed { streak, reward } => {
@@ -255,10 +286,18 @@ fn check_in(database: &mut Database, user_id: u64) -> Result<String, DatabaseErr
                 "daily_checkin",
                 &format!("checkin:{user_id}:{date}:marks"),
             )?;
+            let contribution = database::world_event::contribute(
+                &transaction,
+                group_id,
+                user_id,
+                &date,
+                database::world_event::ContributionKind::CheckIn,
+            )?;
+            let completion = world_completion_message(contribution.completed);
             format!(
                 "签到成功！连续 {streak} 天，金币 +100，刻印 +2。当前金币 {}。",
                 reward.balance_after
-            )
+            ) + completion
         }
         database::activity::CheckInResult::AlreadyCompleted => "今天已经签到过了。".into(),
     };
@@ -268,15 +307,17 @@ fn check_in(database: &mut Database, user_id: u64) -> Result<String, DatabaseErr
 
 fn event(database: &mut Database, group_id: u64, user_id: u64) -> Result<String, DatabaseError> {
     let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    active_player(&transaction, user_id)?;
+    let daily_state = database::daily_state::get_or_create(&transaction, user_id, &date)?;
     let seed = stable_seed(
         &date,
         "event",
         &format!("{group_id}:{user_id}"),
         identity::VERSION_SALT,
-    );
+    ) ^ daily_state.seed.rotate_left(17)
+        ^ (daily_state.modifiers.destiny * 100.0).round() as u64;
     let definition = engine::event::daily_event(seed);
-    let transaction = database.immediate_transaction()?;
-    active_player(&transaction, user_id)?;
     let persisted = database::destiny::daily_event(
         &transaction,
         user_id,
@@ -284,12 +325,62 @@ fn event(database: &mut Database, group_id: u64, user_id: u64) -> Result<String,
         definition,
         &seed.to_string(),
     )?;
+    let contribution = if persisted.created {
+        database::world_event::contribute(
+            &transaction,
+            group_id,
+            user_id,
+            &date,
+            database::world_event::ContributionKind::Destiny,
+        )?
+    } else {
+        database::world_event::ContributionResult::default()
+    };
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
-    Ok(format!("今日机缘：{persisted}"))
+    Ok(format!("今日机缘：{}", persisted.definition_id)
+        + world_completion_message(contribution.completed))
 }
 
-fn ranking(database: &Database) -> Result<String, DatabaseError> {
-    let entries = database::group::ranking(database.connection(), 8)?;
+fn daily_state(database: &mut Database, user_id: u64) -> Result<String, DatabaseError> {
+    let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    let state = database::daily_state::get_or_create(&transaction, user_id, &date)?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    Ok(format!(
+        "今日状态·{}\n{}\n生命 ×{:.2} 攻击 ×{:.2} 防御 ×{:.2} 速度 ×{:.2} 暴击 ×{:.2} 机缘 ×{:.2}",
+        state.name,
+        state.description,
+        state.modifiers.hp,
+        state.modifiers.attack,
+        state.modifiers.defense,
+        state.modifiers.speed,
+        state.modifiers.critical,
+        state.modifiers.destiny,
+    ))
+}
+
+fn world_event(
+    database: &mut Database,
+    group_id: u64,
+    user_id: u64,
+) -> Result<String, DatabaseError> {
+    if group_id == 0 {
+        return Ok("群世界事件仅在群聊中开放。".into());
+    }
+    let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    database::daily_state::get_or_create(&transaction, user_id, &date)?;
+    let summary = database::world_event::summary(&transaction, group_id, &date)?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    Ok(summary)
+}
+
+fn ranking(database: &mut Database, user_id: u64) -> Result<String, DatabaseError> {
+    let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    database::daily_state::get_or_create(&transaction, user_id, &date)?;
+    let entries = database::group::ranking(&transaction, 8)?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
     if entries.is_empty() {
         return Ok("暂无排行数据。".into());
     }
@@ -307,6 +398,7 @@ fn duel(
     group_id: u64,
     user_id: u64,
     arguments: &[&str],
+    gameplay_config: &GameplayConfig,
 ) -> Result<String, DatabaseError> {
     let Some(target_id) = arguments
         .first()
@@ -330,6 +422,8 @@ fn duel(
     };
     let left_cultivation = database::cultivation::get(&transaction, user_id)?;
     let right_cultivation = database::cultivation::get(&transaction, target_id)?;
+    let left_daily = database::daily_state::get_or_create(&transaction, user_id, &date)?;
+    let right_daily = database::daily_state::get_or_create(&transaction, target_id, &date)?;
     let left_system_name = engine::find_system(&left_cultivation.system_id)
         .map(|system| system.name())
         .ok_or_else(|| DatabaseError::InvalidData("unknown left cultivation system".into()))?;
@@ -345,17 +439,19 @@ fn duel(
         &format!("{group_id}:{user_id}:{target_id}"),
         identity::VERSION_SALT,
     );
-    let left_profile = engine::build_combat_profile(
+    let left_profile = engine::build_combat_profile_with_state(
         &left,
         &left_cultivation.system_id,
         left_cultivation.realm_index,
         &date,
+        Some(&left_daily),
     );
-    let right_profile = engine::build_combat_profile(
+    let right_profile = engine::build_combat_profile_with_state(
         &right,
         &right_cultivation.system_id,
         right_cultivation.realm_index,
         &date,
+        Some(&right_daily),
     );
     let result = simulate_combat(
         Combatant {
@@ -388,6 +484,19 @@ fn duel(
         },
         &result,
     )?;
+    let event_completed = database::world_event::contribute_many(
+        &transaction,
+        group_id,
+        &[user_id, target_id],
+        &date,
+        database::world_event::ContributionKind::Duel,
+    )?
+    .completed;
+    let show_report = database::group::battle_report_enabled(
+        &transaction,
+        group_id,
+        gameplay_config.battle_report_enabled,
+    )?;
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
 
     let image = root
@@ -412,13 +521,26 @@ fn duel(
         right_system: right_system_name,
         result: &result,
     };
+    let concise = format!("决斗结束：{winner_name} 获胜，共 {} 回合。", result.rounds);
+    let completion = world_completion_message(event_completed);
     Ok(match render::battle(root, &render_data, &image) {
-        Ok(()) => format!("{report}\n[CQ:image,file={}]", image.display()),
+        Ok(()) if show_report => {
+            format!("{report}\n[CQ:image,file={}]", image.display()) + completion
+        }
+        Ok(()) => format!("[CQ:image,file={}]", image.display()) + completion,
         Err(error) => {
             eprintln!("[Luo Realm] battle rendering failed: {error}");
-            report
+            (if show_report { report } else { concise }) + completion
         }
     })
+}
+
+fn world_completion_message(completed: bool) -> &'static str {
+    if completed {
+        "\n群世界事件已完成，奖励已自动发放给今日贡献者。"
+    } else {
+        ""
+    }
 }
 
 fn battle_report(

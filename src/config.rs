@@ -15,6 +15,7 @@ pub struct RuntimeConfig {
     pub schema_version: u32,
     pub version_salt: String,
     pub command: CommandConfig,
+    pub gameplay: GameplayConfig,
     pub admin: AdminConfig,
 }
 
@@ -24,9 +25,16 @@ impl Default for RuntimeConfig {
             schema_version: 1,
             version_salt: "luo-realm-v1".into(),
             command: CommandConfig::default(),
+            gameplay: GameplayConfig::default(),
             admin: AdminConfig::default(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct GameplayConfig {
+    pub battle_report_enabled: bool,
 }
 
 impl RuntimeConfig {

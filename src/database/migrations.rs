@@ -8,6 +8,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../../migrations/0001_initial.sql")),
     (2, include_str!("../../migrations/0002_admin.sql")),
     (3, include_str!("../../migrations/0003_registration.sql")),
+    (4, include_str!("../../migrations/0004_daily_world.sql")),
 ];
 
 pub(crate) const CURRENT_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;

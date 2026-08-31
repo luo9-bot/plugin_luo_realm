@@ -63,7 +63,7 @@
                         <label class="search-field"><span>搜索</span><input id="groupSearch" inputmode="numeric" placeholder="群号"></label>
                         <button id="groupSearchButton" class="button">查询</button>
                     </div>
-                    <div class="table-shell"><table><thead><tr><th>群号</th><th>总开关</th><th>通用</th><th>事件</th><th>战斗</th><th>更新时间</th><th></th></tr></thead><tbody id="groupRows"></tbody></table></div>
+                    <div class="table-shell"><table><thead><tr><th>群号</th><th>总开关</th><th>通用</th><th>事件</th><th>战斗</th><th>战报文字</th><th>更新时间</th><th></th></tr></thead><tbody id="groupRows"></tbody></table></div>
                 </section>
 
                 <section id="players" class="page">
@@ -102,7 +102,7 @@
                 <section id="settings" class="page">
                     <div class="page-heading"><h1>运行设置</h1></div>
                     <form id="configForm" class="form-layout band">
-                        <div class="form-grid"><label><span>命令模式</span><select id="prefixEnabled"><option value="false">无前缀</option><option value="true">强制前缀</option></select></label><label><span>命令前缀</span><input id="prefix" maxlength="32"></label><label><span>监听地址</span><input id="bind"></label><label><span>起始端口</span><input id="port" type="number" min="1" max="65526"></label></div>
+                        <div class="form-grid"><label><span>命令模式</span><select id="prefixEnabled"><option value="false">无前缀</option><option value="true">强制前缀</option></select></label><label><span>命令前缀</span><input id="prefix" maxlength="32"></label><label><span>逐回合战报</span><select id="battleReportEnabled"><option value="false">默认关闭</option><option value="true">默认开启</option></select></label><label><span>监听地址</span><input id="bind"></label><label><span>起始端口</span><input id="port" type="number" min="1" max="65526"></label></div>
                         <label><span>私聊管理员 QQ（每行一个）</span><textarea id="adminIds"></textarea></label>
                         <div class="form-actions"><button class="button primary" type="submit">保存设置</button></div>
                     </form>

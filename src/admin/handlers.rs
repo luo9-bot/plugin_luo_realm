@@ -4,7 +4,7 @@ use serde::Deserialize;
 use tiny_http::Method;
 
 use crate::{
-    config::{AdminConfig, CommandConfig},
+    config::{AdminConfig, CommandConfig, GameplayConfig},
     cultivation,
     database::{Database, DatabaseError, admin},
     engine,
@@ -177,6 +177,7 @@ struct FeatureRequest {
     general: bool,
     event: bool,
     combat: bool,
+    battle_report_mode: crate::database::group::BattleReportMode,
     reason: String,
 }
 
@@ -189,7 +190,11 @@ fn group_features(state: &AdminState, group_id: &str) -> HttpResponse {
         Ok(serde_json::json!({
             "general": crate::database::group::feature_enabled(connection, group_id, "general")?,
             "event": crate::database::group::feature_enabled(connection, group_id, "event")?,
-            "combat": crate::database::group::feature_enabled(connection, group_id, "combat")?
+            "combat": crate::database::group::feature_enabled(connection, group_id, "combat")?,
+            "battle_report_mode": crate::database::group::battle_report_mode(
+                connection,
+                group_id,
+            )?.code()
         }))
     })
 }
@@ -215,6 +220,7 @@ fn set_group_features(body: &[u8], state: &AdminState, group_id: &str) -> HttpRe
                 ("event", request.event),
                 ("combat", request.combat),
             ],
+            request.battle_report_mode,
             request.reason.trim(),
         )?;
         Ok(serde_json::json!({"group_id": group_id}))
@@ -480,6 +486,7 @@ fn update_statistic(body: &[u8], state: &AdminState, player_id: &str) -> HttpRes
 #[derive(Deserialize)]
 struct ConfigRequest {
     command: CommandConfig,
+    gameplay: GameplayConfig,
     admin: AdminConfig,
     reason: String,
     confirm: Option<String>,
@@ -500,6 +507,7 @@ fn update_config(body: &[u8], state: &AdminState) -> HttpResponse {
     };
     let mut config = state.policy.snapshot();
     config.command = request.command;
+    config.gameplay = request.gameplay;
     config.admin = request.admin;
     if let Err(config_error) = config.validate() {
         return error(400, "invalid_config", &config_error.to_string());

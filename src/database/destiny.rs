@@ -2,13 +2,18 @@ use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::{DatabaseError, DatabaseResult, player_id};
 
+pub struct DailyEventResult {
+    pub definition_id: String,
+    pub created: bool,
+}
+
 pub fn daily_event(
     transaction: &Transaction<'_>,
     user_id: u64,
     date: &str,
     definition_id: &str,
     seed: &str,
-) -> DatabaseResult<String> {
+) -> DatabaseResult<DailyEventResult> {
     let player_id = player_id(user_id)?;
     if let Some(existing) = transaction
         .query_row(
@@ -20,7 +25,10 @@ pub fn daily_event(
         .optional()
         .map_err(DatabaseError::from_sqlite)?
     {
-        return Ok(existing);
+        return Ok(DailyEventResult {
+            definition_id: existing,
+            created: false,
+        });
     }
     transaction
         .execute(
@@ -29,5 +37,8 @@ pub fn daily_event(
             params![player_id, date, definition_id, seed],
         )
         .map_err(DatabaseError::from_sqlite)?;
-    Ok(definition_id.to_owned())
+    Ok(DailyEventResult {
+        definition_id: definition_id.to_owned(),
+        created: true,
+    })
 }

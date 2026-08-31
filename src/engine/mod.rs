@@ -3,9 +3,11 @@ use crate::{
     cultivation::{AttributeModifier, CultivationContext, registered_systems},
 };
 
+pub mod daily_state;
 pub mod destiny;
 pub mod event;
 pub mod power;
+pub mod world_event;
 
 pub fn find_system(system_id: &str) -> Option<Box<dyn crate::cultivation::CultivationSystem>> {
     registered_systems()
@@ -52,22 +54,40 @@ pub fn build_combat_profile(
     realm_index: u32,
     date: &str,
 ) -> CombatProfile {
+    build_combat_profile_with_state(player, system_id, realm_index, date, None)
+}
+
+pub fn build_combat_profile_with_state(
+    player: &Player,
+    system_id: &str,
+    realm_index: u32,
+    date: &str,
+    daily_state: Option<&daily_state::DailyState>,
+) -> CombatProfile {
     let context = CultivationContext {
         realm: realm_index as usize,
         level: player.level,
         destiny_power: 0.0,
     };
     let system = find_system(system_id);
-    let modifier = system
+    let mut modifier = system
         .as_ref()
         .map(|system| system.attribute_modifier(&context))
         .unwrap_or_default();
     let realm_multiplier = 1.0 + realm_index as f64 * 0.08;
-    let destiny_multiplier = destiny::destiny_multiplier(destiny::destiny_seed(
+    let mut destiny_multiplier = destiny::destiny_multiplier(destiny::destiny_seed(
         date,
         &player.user_id,
         crate::identity::VERSION_SALT,
     ));
+    if let Some(state) = daily_state {
+        modifier.hp *= state.modifiers.hp;
+        modifier.attack *= state.modifiers.attack;
+        modifier.defense *= state.modifiers.defense;
+        modifier.speed *= state.modifiers.speed;
+        modifier.critical *= state.modifiers.critical;
+        destiny_multiplier *= state.modifiers.destiny;
+    }
     let power = power::calculate_total_power(
         player.base_hp as f64,
         player.base_attack as f64,

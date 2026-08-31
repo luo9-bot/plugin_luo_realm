@@ -1,6 +1,75 @@
 use rusqlite::{Connection, Transaction, params};
+use serde::{Deserialize, Serialize};
 
 use super::{DatabaseError, DatabaseResult, player_id, unix_timestamp};
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BattleReportMode {
+    Inherit,
+    Enabled,
+    Disabled,
+}
+
+impl BattleReportMode {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Inherit => "inherit",
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+pub fn battle_report_mode(
+    connection: &Connection,
+    group_id: u64,
+) -> DatabaseResult<BattleReportMode> {
+    let value: String = connection
+        .query_row(
+            "SELECT battle_report_mode FROM groups WHERE group_id=?1",
+            [player_id(group_id)?],
+            |row| row.get(0),
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    match value.as_str() {
+        "inherit" => Ok(BattleReportMode::Inherit),
+        "enabled" => Ok(BattleReportMode::Enabled),
+        "disabled" => Ok(BattleReportMode::Disabled),
+        _ => Err(DatabaseError::InvalidData(
+            "unknown battle report mode".into(),
+        )),
+    }
+}
+
+pub fn battle_report_enabled(
+    connection: &Connection,
+    group_id: u64,
+    global_default: bool,
+) -> DatabaseResult<bool> {
+    if group_id == 0 {
+        return Ok(global_default);
+    }
+    Ok(match battle_report_mode(connection, group_id)? {
+        BattleReportMode::Inherit => global_default,
+        BattleReportMode::Enabled => true,
+        BattleReportMode::Disabled => false,
+    })
+}
+
+pub fn set_battle_report_mode(
+    transaction: &Transaction<'_>,
+    group_id: u64,
+    mode: BattleReportMode,
+) -> DatabaseResult<()> {
+    transaction
+        .execute(
+            "UPDATE groups SET battle_report_mode=?2, updated_at=?3 WHERE group_id=?1",
+            params![player_id(group_id)?, mode.code(), unix_timestamp()],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    Ok(())
+}
 
 pub fn is_enabled(connection: &Connection, group_id: u64) -> DatabaseResult<bool> {
     connection

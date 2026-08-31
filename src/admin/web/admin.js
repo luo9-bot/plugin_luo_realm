@@ -147,6 +147,16 @@ async function loadGroups() {
             input.dataset.key = key;
             tableCell(row, '').appendChild(input);
         });
+        const reportMode = document.createElement('select');
+        reportMode.dataset.key = 'battle_report_mode';
+        [['inherit', '跟随全局'], ['enabled', '开启'], ['disabled', '关闭']].forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            reportMode.appendChild(option);
+        });
+        reportMode.value = group.battle_report_mode;
+        tableCell(row, '').appendChild(reportMode);
         tableCell(row, new Date(group.updated_at * 1000).toLocaleString());
         tableCell(row, '').appendChild(makeButton('保存', () => saveGroup(group, row)));
         return row;
@@ -156,6 +166,7 @@ async function loadGroups() {
 
 async function saveGroup(group, row) {
     const values = Object.fromEntries([...row.querySelectorAll('input')].map(input => [input.dataset.key, input.checked]));
+    values.battle_report_mode = row.querySelector('select[data-key="battle_report_mode"]').value;
     const confirmation = values.enabled === false && group.enabled ? `group:${group.group_id}:disable` : '';
     const action = await requestAction({ title: '保存群聊策略', message: `群 ${group.group_id}`, confirmation, danger: Boolean(confirmation) });
     if (!action) return;
@@ -163,7 +174,7 @@ async function saveGroup(group, row) {
         if (values.enabled !== group.enabled) {
             await api(`/api/groups/${group.group_id}`, { method: 'PUT', body: JSON.stringify({ enabled: values.enabled, ...action }) });
         }
-        await api(`/api/groups/${group.group_id}/features`, { method: 'PUT', body: JSON.stringify({ general: values.general, event: values.event, combat: values.combat, reason: action.reason }) });
+        await api(`/api/groups/${group.group_id}/features`, { method: 'PUT', body: JSON.stringify({ general: values.general, event: values.event, combat: values.combat, battle_report_mode: values.battle_report_mode, reason: action.reason }) });
         notify('群聊策略已保存');
         await loadGroups();
     } catch (error) { notify(error.message, true); }
@@ -531,6 +542,7 @@ async function loadSettings() {
     state.config = await api('/api/config');
     byId('prefixEnabled').value = String(state.config.command.prefix_enabled);
     byId('prefix').value = state.config.command.prefix;
+    byId('battleReportEnabled').value = String(state.config.gameplay.battle_report_enabled);
     byId('adminIds').value = state.config.admin.admin_ids.join('\n');
     byId('bind').value = state.config.admin.bind;
     byId('port').value = state.config.admin.port;
@@ -549,6 +561,7 @@ async function saveSettings(event) {
     const adminIds = byId('adminIds').value.split(/\s+/).filter(Boolean).map(Number).filter(Number.isSafeInteger);
     const payload = {
         command: { prefix_enabled: byId('prefixEnabled').value === 'true', prefix: byId('prefix').value },
+        gameplay: { battle_report_enabled: byId('battleReportEnabled').value === 'true' },
         admin: { enabled: state.config.admin.enabled, bind: byId('bind').value, port: Number(byId('port').value), admin_ids: adminIds },
         ...action,
     };

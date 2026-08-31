@@ -30,6 +30,7 @@ pub struct GroupRow {
     pub general: bool,
     pub event: bool,
     pub combat: bool,
+    pub battle_report_mode: String,
     pub updated_at: i64,
 }
 
@@ -143,7 +144,7 @@ pub fn list_groups(
                               WHERE group_id=g.group_id AND feature_code='event'), 1),
                     COALESCE((SELECT enabled FROM group_features
                               WHERE group_id=g.group_id AND feature_code='combat'), 1),
-                    updated_at
+                    battle_report_mode, updated_at
              FROM groups g WHERE CAST(group_id AS TEXT) LIKE ?1
              ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
         )
@@ -156,7 +157,8 @@ pub fn list_groups(
                 general: row.get(2)?,
                 event: row.get(3)?,
                 combat: row.get(4)?,
-                updated_at: row.get(5)?,
+                battle_report_mode: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })
         .map_err(DatabaseError::from_sqlite)?;
@@ -272,6 +274,7 @@ pub fn set_group_features(
     operator: &str,
     group_id: u64,
     features: &[(&str, bool)],
+    battle_report_mode: super::group::BattleReportMode,
     reason: &str,
 ) -> DatabaseResult<()> {
     if features
@@ -293,6 +296,7 @@ pub fn set_group_features(
     features.iter().try_for_each(|(feature, enabled)| {
         super::group::set_feature(transaction, group_id, feature, *enabled)
     })?;
+    super::group::set_battle_report_mode(transaction, group_id, battle_report_mode)?;
     audit_success(
         transaction,
         AuditEntry {
@@ -302,7 +306,10 @@ pub fn set_group_features(
             target_id: &group_id.to_string(),
             reason,
             before: None,
-            after: Some(serde_json::json!(features)),
+            after: Some(serde_json::json!({
+                "features": features,
+                "battle_report_mode": battle_report_mode.code()
+            })),
         },
     )
 }

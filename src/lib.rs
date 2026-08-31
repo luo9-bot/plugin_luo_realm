@@ -54,7 +54,15 @@ pub fn route_message(
         }
     };
 
-    command::handle_message(database, root, group_id, user_id, message, &config.command)
+    command::handle_message(
+        database,
+        root,
+        group_id,
+        user_id,
+        message,
+        &config.command,
+        &config.gameplay,
+    )
 }
 
 pub fn handle_message(
@@ -71,6 +79,7 @@ pub fn handle_message(
         user_id,
         message,
         &CommandConfig::default(),
+        &config::GameplayConfig::default(),
     )
 }
 
@@ -82,7 +91,15 @@ pub fn handle_message_with_config(
     message: &str,
     command_config: &CommandConfig,
 ) -> Result<Option<String>, DatabaseError> {
-    command::handle_message(database, root, group_id, user_id, message, command_config)
+    command::handle_message(
+        database,
+        root,
+        group_id,
+        user_id,
+        message,
+        command_config,
+        &config::GameplayConfig::default(),
+    )
 }
 
 #[unsafe(no_mangle)]

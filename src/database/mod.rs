@@ -2,12 +2,14 @@ pub mod activity;
 pub mod admin;
 pub mod combat;
 pub mod cultivation;
+pub mod daily_state;
 pub mod destiny;
 pub mod error;
 pub mod group;
 pub mod inventory;
 pub mod player;
 pub mod wallet;
+pub mod world_event;
 
 mod connection;
 mod migrations;
