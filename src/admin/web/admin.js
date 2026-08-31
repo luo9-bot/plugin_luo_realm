@@ -543,6 +543,10 @@ async function loadSettings() {
     byId('prefixEnabled').value = String(state.config.command.prefix_enabled);
     byId('prefix').value = state.config.command.prefix;
     byId('battleReportEnabled').value = String(state.config.gameplay.battle_report_enabled);
+    byId('asciiFpvEnabled').value = String(state.config.game.ascii_fpv_enabled);
+    byId('asciiFpvDomain').value = state.config.game.ascii_fpv_domain;
+    byId('rewardPublicKey').value = state.config.game.reward_public_key;
+    byId('dailyRedemptionLimit').value = state.config.game.daily_redemption_limit;
     byId('adminIds').value = state.config.admin.admin_ids.join('\n');
     byId('bind').value = state.config.admin.bind;
     byId('port').value = state.config.admin.port;
@@ -562,6 +566,12 @@ async function saveSettings(event) {
     const payload = {
         command: { prefix_enabled: byId('prefixEnabled').value === 'true', prefix: byId('prefix').value },
         gameplay: { battle_report_enabled: byId('battleReportEnabled').value === 'true' },
+        game: {
+            ascii_fpv_enabled: byId('asciiFpvEnabled').value === 'true',
+            ascii_fpv_domain: byId('asciiFpvDomain').value.trim(),
+            reward_public_key: byId('rewardPublicKey').value.trim(),
+            daily_redemption_limit: Number(byId('dailyRedemptionLimit').value),
+        },
         admin: { enabled: state.config.admin.enabled, bind: byId('bind').value, port: Number(byId('port').value), admin_ids: adminIds },
         ...action,
     };

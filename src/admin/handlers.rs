@@ -4,7 +4,7 @@ use serde::Deserialize;
 use tiny_http::Method;
 
 use crate::{
-    config::{AdminConfig, CommandConfig, GameplayConfig},
+    config::{AdminConfig, CommandConfig, GameConfig, GameplayConfig},
     cultivation,
     database::{Database, DatabaseError, admin},
     engine,
@@ -487,6 +487,7 @@ fn update_statistic(body: &[u8], state: &AdminState, player_id: &str) -> HttpRes
 struct ConfigRequest {
     command: CommandConfig,
     gameplay: GameplayConfig,
+    game: GameConfig,
     admin: AdminConfig,
     reason: String,
     confirm: Option<String>,
@@ -508,6 +509,7 @@ fn update_config(body: &[u8], state: &AdminState) -> HttpResponse {
     let mut config = state.policy.snapshot();
     config.command = request.command;
     config.gameplay = request.gameplay;
+    config.game = request.game;
     config.admin = request.admin;
     if let Err(config_error) = config.validate() {
         return error(400, "invalid_config", &config_error.to_string());

@@ -16,6 +16,13 @@
 *.lock
 !Cargo.lock
 
+# 小游戏部署缓存与本地密钥
+node_modules/
+.vercel/
+.wrangler/
+.dev.vars
+*.pem
+
 # Python 离线工具缓存
 __pycache__/
 *.py[cod]

@@ -5,7 +5,7 @@ use std::path::Path;
 use rusqlite::Transaction;
 
 use crate::{
-    config::{CommandConfig, GameplayConfig},
+    config::{CommandConfig, GameConfig, GameplayConfig, RuntimeConfig},
     core::{Combatant, Player, simulate_combat, stable_seed},
     database::{self, Database, DatabaseError},
     engine, identity, render,
@@ -37,6 +37,8 @@ enum Command {
     Ranking,
     Rename,
     Duel,
+    AsciiFpv,
+    Redeem,
 }
 
 impl Command {
@@ -55,6 +57,8 @@ impl Command {
             "排行" | "ranking" => Some(Self::Ranking),
             "改名" | "name" => Some(Self::Rename),
             "决斗" | "duel" => Some(Self::Duel),
+            "御空试炼" | "飞行试炼" | "fpv" => Some(Self::AsciiFpv),
+            "兑换" | "redeem" => Some(Self::Redeem),
             _ => None,
         }
     }
@@ -91,10 +95,9 @@ pub fn handle_message(
     group_id: u64,
     user_id: u64,
     message: &str,
-    command_config: &CommandConfig,
-    gameplay_config: &GameplayConfig,
+    config: &RuntimeConfig,
 ) -> Result<Option<String>, DatabaseError> {
-    let Some(text) = command_config.command_text(message) else {
+    let Some(text) = config.command.command_text(message) else {
         return Ok(None);
     };
     let arguments = text.split_whitespace().collect::<Vec<_>>();
@@ -116,7 +119,7 @@ pub fn handle_message(
         root,
         group_id,
         user_id,
-        gameplay_config,
+        config,
     )
     .map(Some)
 }
@@ -144,11 +147,11 @@ fn dispatch(
     root: &Path,
     group_id: u64,
     user_id: u64,
-    gameplay_config: &GameplayConfig,
+    config: &RuntimeConfig,
 ) -> Result<String, DatabaseError> {
     match command {
         Command::Menu => Ok(format!(
-            "{}：注册 / 体系 / 选择体系 / 签到 / 状态 / 今日状态 / 战力 / 每日事件 / 世界事件 / 决斗 / 排行 / 改名",
+            "{}：注册 / 体系 / 选择体系 / 签到 / 状态 / 今日状态 / 战力 / 每日事件 / 世界事件 / 决斗 / 御空试炼 / 兑换 / 排行 / 改名",
             identity::PRODUCT_NAME
         )),
         Command::Systems => Ok(format!("可选修行体系：{}", registration::system_catalog())),
@@ -168,9 +171,75 @@ fn dispatch(
             group_id,
             user_id,
             arguments,
-            gameplay_config,
+            &config.gameplay,
         ),
+        Command::AsciiFpv => ascii_fpv(root, user_id, &config.game),
+        Command::Redeem => redeem(database, user_id, arguments, &config.game),
     }
+}
+
+fn ascii_fpv(root: &Path, user_id: u64, config: &GameConfig) -> Result<String, DatabaseError> {
+    if config.reward_public_key.trim().is_empty() {
+        return Ok("御空试炼尚未完成兑换公钥配置，请联系管理员。".into());
+    }
+    match crate::game::issue_ascii_fpv_url(root, user_id, config) {
+        Ok(url) => Ok(format!(
+            "御空试炼已开启：\n{url}\n游戏可无限重开；兑换次数按每日额度计算，网址 2 小时内有效。"
+        )),
+        Err(crate::game::GameError::NotConfigured) => Ok("御空试炼当前未开启。".into()),
+        Err(error) => Err(DatabaseError::InvalidData(error.to_string())),
+    }
+}
+
+fn redeem(
+    database: &mut Database,
+    user_id: u64,
+    arguments: &[&str],
+    config: &GameConfig,
+) -> Result<String, DatabaseError> {
+    if !config.ascii_fpv_enabled || config.reward_public_key.trim().is_empty() {
+        return Ok("小游戏兑换功能当前未开启。".into());
+    }
+    let Some(code) = arguments.first() else {
+        return Ok("请发送“兑换 <兑换码>”。".into());
+    };
+    let now = database::unix_timestamp();
+    let voucher =
+        match crate::game::verify_reward_voucher(code, &config.reward_public_key, user_id, now) {
+            Ok(voucher) => voucher,
+            Err(crate::game::GameError::ExpiredVoucher) => return Ok("兑换码已经过期。".into()),
+            Err(crate::game::GameError::WrongPlayer) => {
+                return Ok("该兑换码不属于当前账号。".into());
+            }
+            Err(crate::game::GameError::NotConfigured) => {
+                return Ok("小游戏兑换公钥尚未配置。".into());
+            }
+            Err(_) => return Ok("兑换码无效或已被修改。".into()),
+        };
+    let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    active_player(&transaction, user_id)?;
+    let result = database::game_reward::redeem(
+        &transaction,
+        &voucher,
+        &date,
+        config.daily_redemption_limit,
+    )?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+
+    Ok(match result {
+        database::game_reward::RedemptionResult::Redeemed {
+            reward,
+            balance_after,
+            remaining_today,
+        } => format!(
+            "兑换成功：金币 +{reward}。当前金币 {balance_after}，今日还可兑换 {remaining_today} 次。"
+        ),
+        database::game_reward::RedemptionResult::AlreadyRedeemed => "该兑换码已经使用过。".into(),
+        database::game_reward::RedemptionResult::DailyLimitReached => {
+            "今天的小游戏兑换次数已用完，仍可继续游玩。".into()
+        }
+    })
 }
 
 fn active_player(transaction: &Transaction<'_>, user_id: u64) -> Result<Player, DatabaseError> {

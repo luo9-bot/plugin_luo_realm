@@ -5,6 +5,7 @@ pub mod cultivation;
 pub mod daily_state;
 pub mod destiny;
 pub mod error;
+pub mod game_reward;
 pub mod group;
 pub mod inventory;
 pub mod player;

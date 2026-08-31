@@ -144,6 +144,8 @@ SQLite 会自动恢复。配置和 Token 使用 `.new/.bak` 可恢复替换，�
 每日事件
 世界事件
 决斗 <QQ>
+御空试炼
+兑换 <兑换码>
 排行
 改名 <名称>
 ```
@@ -173,7 +175,14 @@ SQLite 会自动恢复。配置和 Token 使用 `.new/.bak` 可恢复替换，�
 /lr 决斗 123456789
 /lr 今日状态
 /lr 世界事件
+/lr 御空试炼
+/lr 兑换 eyJhbGciOiJFZERTQSIs...
 ```
+
+御空试炼会生成形如 `随机票据.ascii-fpv.luo-realm.drluo.top` 的两小时专属网址。
+游戏可以无限游玩，每局结束后由云端签发绑定玩家的 Ed25519 兑换码；插件只保存公钥，
+因此逆向插件无法伪造兑换码。兑换次数由 SQLite 按玩家和日期限制，默认每天 3 次。
+完整部署步骤见 `https://github.com/luo-realm-webgames/ascii-fpv/README.md`。
 
 ## 角色卡与战斗动画
 

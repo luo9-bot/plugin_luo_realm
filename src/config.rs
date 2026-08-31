@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 
 use crate::identity;
@@ -16,6 +17,7 @@ pub struct RuntimeConfig {
     pub version_salt: String,
     pub command: CommandConfig,
     pub gameplay: GameplayConfig,
+    pub game: GameConfig,
     pub admin: AdminConfig,
 }
 
@@ -26,6 +28,7 @@ impl Default for RuntimeConfig {
             version_salt: "luo-realm-v1".into(),
             command: CommandConfig::default(),
             gameplay: GameplayConfig::default(),
+            game: GameConfig::default(),
             admin: AdminConfig::default(),
         }
     }
@@ -35,6 +38,26 @@ impl Default for RuntimeConfig {
 #[serde(default)]
 pub struct GameplayConfig {
     pub battle_report_enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct GameConfig {
+    pub ascii_fpv_enabled: bool,
+    pub ascii_fpv_domain: String,
+    pub reward_public_key: String,
+    pub daily_redemption_limit: u32,
+}
+
+impl Default for GameConfig {
+    fn default() -> Self {
+        Self {
+            ascii_fpv_enabled: false,
+            ascii_fpv_domain: "ascii-fpv.luo-realm.drluo.top".into(),
+            reward_public_key: String::new(),
+            daily_redemption_limit: 3,
+        }
+    }
 }
 
 impl RuntimeConfig {
@@ -91,6 +114,26 @@ impl RuntimeConfig {
                 "administrator IDs must be positive".into(),
             ));
         }
+        if !valid_domain(&self.game.ascii_fpv_domain) {
+            return Err(ConfigError::InvalidGame(
+                "ASCII FPV domain must be a valid hostname without a scheme".into(),
+            ));
+        }
+        if !(1..=10).contains(&self.game.daily_redemption_limit) {
+            return Err(ConfigError::InvalidGame(
+                "daily redemption limit must be between 1 and 10".into(),
+            ));
+        }
+        if !self.game.reward_public_key.trim().is_empty() {
+            let key = URL_SAFE_NO_PAD
+                .decode(self.game.reward_public_key.trim().as_bytes())
+                .map_err(|_| ConfigError::InvalidGame("reward public key is invalid".into()))?;
+            if key.len() != 32 {
+                return Err(ConfigError::InvalidGame(
+                    "reward public key must contain 32 bytes".into(),
+                ));
+            }
+        }
         let unique = self
             .admin
             .admin_ids
@@ -103,6 +146,22 @@ impl RuntimeConfig {
         }
         Ok(())
     }
+}
+
+fn valid_domain(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 253
+        && !value.contains("://")
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 fn replace_file(path: &Path, temporary: &Path, content: &[u8]) -> Result<(), ConfigError> {
@@ -275,6 +334,8 @@ pub enum ConfigError {
     },
     #[error("invalid admin configuration: {0}")]
     InvalidAdmin(String),
+    #[error("invalid game configuration: {0}")]
+    InvalidGame(String),
 }
 
 #[cfg(test)]

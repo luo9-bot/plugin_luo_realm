@@ -5,6 +5,7 @@ pub mod core;
 pub mod cultivation;
 pub mod database;
 pub mod engine;
+pub mod game;
 pub mod identity;
 
 mod paths;
@@ -54,15 +55,7 @@ pub fn route_message(
         }
     };
 
-    command::handle_message(
-        database,
-        root,
-        group_id,
-        user_id,
-        message,
-        &config.command,
-        &config.gameplay,
-    )
+    command::handle_message(database, root, group_id, user_id, message, &config)
 }
 
 pub fn handle_message(
@@ -78,8 +71,7 @@ pub fn handle_message(
         group_id,
         user_id,
         message,
-        &CommandConfig::default(),
-        &config::GameplayConfig::default(),
+        &RuntimeConfig::default(),
     )
 }
 
@@ -91,15 +83,11 @@ pub fn handle_message_with_config(
     message: &str,
     command_config: &CommandConfig,
 ) -> Result<Option<String>, DatabaseError> {
-    command::handle_message(
-        database,
-        root,
-        group_id,
-        user_id,
-        message,
-        command_config,
-        &config::GameplayConfig::default(),
-    )
+    let config = RuntimeConfig {
+        command: command_config.clone(),
+        ..RuntimeConfig::default()
+    };
+    command::handle_message(database, root, group_id, user_id, message, &config)
 }
 
 #[unsafe(no_mangle)]
