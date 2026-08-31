@@ -357,6 +357,54 @@ pub fn update_profile(
     )
 }
 
+pub fn delete_player(
+    transaction: &Transaction<'_>,
+    operator: &str,
+    user_id: u64,
+    reason: &str,
+) -> DatabaseResult<()> {
+    let id = player_id(user_id)?;
+    let before = serde_json::to_value(player_detail(transaction, user_id)?)
+        .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+
+    transaction
+        .execute(
+            "DELETE FROM combat_records
+             WHERE winner_player_id=?1 OR combat_id IN (
+                 SELECT combat_id FROM combat_participants WHERE player_id=?1
+             )",
+            [id],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    [
+        "DELETE FROM daily_checkins WHERE player_id=?1",
+        "DELETE FROM wallet_transactions WHERE player_id=?1",
+        "DELETE FROM breakthrough_history WHERE player_id=?1",
+        "DELETE FROM destiny_events WHERE player_id=?1",
+        "DELETE FROM players WHERE player_id=?1",
+    ]
+    .into_iter()
+    .try_for_each(|statement| {
+        transaction
+            .execute(statement, [id])
+            .map(|_| ())
+            .map_err(DatabaseError::from_sqlite)
+    })?;
+
+    audit_success(
+        transaction,
+        AuditEntry {
+            operator,
+            action: "player.delete",
+            target_type: "player",
+            target_id: &user_id.to_string(),
+            reason,
+            before: Some(before),
+            after: None,
+        },
+    )
+}
+
 pub fn adjust_wallet(
     transaction: &Transaction<'_>,
     operator: &str,

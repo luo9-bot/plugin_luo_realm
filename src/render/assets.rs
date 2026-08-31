@@ -76,10 +76,28 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         }
         return Err(error);
     }
+    sync_directory(parent)?;
     if backup.exists() {
         fs::remove_file(backup)?;
+        sync_directory(parent)?;
     }
     Ok(())
+}
+
+pub fn recover_asset_tree(plugin_root: &Path) -> io::Result<()> {
+    let root = plugin_root.join("assets");
+    if !root.exists() {
+        return Ok(());
+    }
+    recover_directory(&root)
+}
+
+pub fn recover_atomic_write(path: &Path) -> io::Result<()> {
+    recover_interrupted_replace(
+        path,
+        &sibling_with_suffix(path, ".new"),
+        &sibling_with_suffix(path, ".bak"),
+    )
 }
 
 fn font_candidates(plugin_root: &Path) -> Vec<PathBuf> {
@@ -141,6 +159,57 @@ fn recover_interrupted_replace(path: &Path, temporary: &Path, backup: &Path) -> 
             fs::rename(backup, path)?;
         }
     }
+    Ok(())
+}
+
+fn recover_directory(directory: &Path) -> io::Result<()> {
+    fs::read_dir(directory)?.try_for_each(|entry| {
+        let path = entry?.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if recovery_metadata_is_link(&metadata) {
+            return Ok(());
+        }
+        if metadata.is_dir() {
+            return recover_directory(&path);
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return Ok(());
+        };
+        let original_name = name
+            .strip_suffix(".new")
+            .or_else(|| name.strip_suffix(".bak"));
+        let Some(original_name) = original_name else {
+            return Ok(());
+        };
+        let original = path.with_file_name(original_name);
+        recover_interrupted_replace(
+            &original,
+            &sibling_with_suffix(&original, ".new"),
+            &sibling_with_suffix(&original, ".bak"),
+        )
+    })
+}
+
+#[cfg(windows)]
+fn recovery_metadata_is_link(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn recovery_metadata_is_link(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(unix)]
+fn sync_directory(directory: &Path) -> io::Result<()> {
+    File::open(directory)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_directory: &Path) -> io::Result<()> {
     Ok(())
 }
 

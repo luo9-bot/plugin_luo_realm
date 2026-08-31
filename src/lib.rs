@@ -88,6 +88,17 @@ pub fn handle_message_with_config(
 #[unsafe(no_mangle)]
 pub extern "C" fn plugin_main() {
     let root = paths::plugin_root();
+    if let Err(error) = render::assets::recover_asset_tree(&root) {
+        eprintln!("[Luo Realm] asset recovery failed: {error}");
+    }
+    if let Err(error) = admin::recover_asset_import(&root) {
+        eprintln!("[Luo Realm] asset bundle recovery failed: {error}");
+    }
+    let database_path = paths::database_path();
+    if let Err(error) = admin::recover_database_import(&root, &database_path) {
+        eprintln!("[Luo Realm] database import recovery failed: {error}");
+        return;
+    }
     let config = match RuntimeConfig::load(&root) {
         Ok(config) => config,
         Err(error) => {
@@ -96,7 +107,7 @@ pub extern "C" fn plugin_main() {
         }
     };
     let policy = RuntimePolicy::new(config);
-    let mut database = match Database::open(paths::database_path()) {
+    let mut database = match Database::open(&database_path) {
         Ok(database) => database,
         Err(error) => {
             eprintln!("[Luo Realm] database startup failed: {error}");
@@ -104,7 +115,7 @@ pub extern "C" fn plugin_main() {
         }
     };
     if policy.snapshot().admin.enabled {
-        let _admin_thread = admin::start(root.clone(), paths::database_path(), policy.clone());
+        let _admin_thread = admin::start(root.clone(), database_path, policy.clone());
     }
     let topic = Bus::topic("luo9_message");
     let Ok(subscriber) = topic.subscribe() else {

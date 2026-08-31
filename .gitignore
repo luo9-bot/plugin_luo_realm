@@ -4,6 +4,9 @@
 # 插件运行时数据与生成内容
 /data/
 /assets/
+/.assets.import/
+/.assets.backup/
+/.assets.pending
 /logs/
 *.sqlite3
 *.sqlite3-wal

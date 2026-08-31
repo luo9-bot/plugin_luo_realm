@@ -10,6 +10,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (3, include_str!("../../migrations/0003_registration.sql")),
 ];
 
+pub(crate) const CURRENT_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;
+
 pub fn apply(connection: &mut Connection) -> DatabaseResult<()> {
     let migration_table_exists: bool = connection
         .query_row(

@@ -10,7 +10,11 @@ use crate::{
     engine,
 };
 
-use super::router::{AdminState, HttpResponse, error, ok};
+use super::{
+    assets,
+    router::{AdminState, HttpResponse, binary, download, error, ok},
+    transfer,
+};
 
 pub fn dispatch(method: &Method, url: &str, body: &[u8], state: &Arc<AdminState>) -> HttpResponse {
     let path = url.split('?').next().unwrap_or(url);
@@ -63,6 +67,7 @@ pub fn dispatch(method: &Method, url: &str, body: &[u8], state: &Arc<AdminState>
                 admin::player_detail(database.connection(), player_id).and_then(to_json)
             })
         }
+        (&Method::Delete, ["api", "players", player_id]) => delete_player(body, state, player_id),
         (&Method::Put, ["api", "players", player_id, "profile"]) => {
             update_profile(body, state, player_id)
         }
@@ -93,6 +98,14 @@ pub fn dispatch(method: &Method, url: &str, body: &[u8], state: &Arc<AdminState>
         (&Method::Put, ["api", "config"]) => update_config(body, state),
         (&Method::Get, ["api", "definitions", "cultivation"]) => cultivation_definitions(),
         (&Method::Post, ["api", "backup"]) => create_backup(body, state),
+        (&Method::Get, ["api", "assets"]) => list_assets(state, &query),
+        (&Method::Get, ["api", "assets", "file"]) => read_asset(state, &query),
+        (&Method::Post, ["api", "assets", "file"]) => write_asset(body, state, &query),
+        (&Method::Delete, ["api", "assets", "file"]) => remove_asset(body, state, &query),
+        (&Method::Get, ["api", "assets", "export"]) => export_assets(state, &query),
+        (&Method::Post, ["api", "assets", "import"]) => import_assets(body, state, &query),
+        (&Method::Get, ["api", "data", "export"]) => export_data(state, &query),
+        (&Method::Post, ["api", "data", "import"]) => import_data(body, state, &query),
         (&Method::Post, ["api", "token", "rotate"]) => rotate_token(body, state),
         _ => error(404, "not_found", "接口不存在"),
     }
@@ -245,6 +258,24 @@ fn update_profile(body: &[u8], state: &AdminState, player_id: &str) -> HttpRespo
             request.reason.trim(),
         )?;
         Ok(serde_json::json!({"player_id": player_id}))
+    })
+}
+
+fn delete_player(body: &[u8], state: &AdminState, player_id: &str) -> HttpResponse {
+    let Some(player_id) = parse_id(player_id) else {
+        return invalid("玩家 ID 无效");
+    };
+    let request: ReasonRequest = match parse(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let summary = format!("player:{player_id}:delete");
+    if !valid_reason(&request.reason) || !confirmed(&request.confirm, &summary) {
+        return confirmation_required(summary);
+    }
+    write_database(state, |transaction| {
+        admin::delete_player(transaction, "web", player_id, request.reason.trim())?;
+        Ok(serde_json::json!({"deleted": player_id}))
     })
 }
 
@@ -560,6 +591,235 @@ fn create_backup(body: &[u8], state: &AdminState) -> HttpResponse {
     }
 }
 
+fn list_assets(state: &AdminState, query: &Query) -> HttpResponse {
+    match assets::list(
+        &state.plugin_root,
+        query.get("category").unwrap_or(""),
+        query.get("search").unwrap_or(""),
+        query.number("page", 1),
+        query.number("limit", 60),
+    ) {
+        Ok(page) => json_value(page),
+        Err(error_value) => asset_error(error_value),
+    }
+}
+
+fn read_asset(state: &AdminState, query: &Query) -> HttpResponse {
+    let Some(path) = query.get("path") else {
+        return invalid("缺少素材路径");
+    };
+    match assets::read(&state.plugin_root, path) {
+        Ok((bytes, content_type)) => binary(bytes, content_type),
+        Err(error_value) => asset_error(error_value),
+    }
+}
+
+fn write_asset(body: &[u8], state: &AdminState, query: &Query) -> HttpResponse {
+    let (Some(path), Some(reason), Some(confirm)) =
+        (query.get("path"), query.get("reason"), query.get("confirm"))
+    else {
+        return invalid("素材路径、原因或确认摘要不完整");
+    };
+    let summary = format!("asset:{path}:write");
+    if !valid_reason(reason) || confirm != summary {
+        return confirmation_required(summary);
+    }
+    let previous = match assets::read(&state.plugin_root, path) {
+        Ok((bytes, _)) => Some(bytes),
+        Err(assets::AssetError::NotFound) => None,
+        Err(error_value) => return asset_error(error_value),
+    };
+    match assets::write(&state.plugin_root, path, body) {
+        Ok(replaced) => match audit_external(
+            state,
+            "asset.write",
+            "asset",
+            path,
+            reason,
+            None,
+            Some(serde_json::json!({"replaced": replaced, "bytes": body.len()})),
+        ) {
+            Ok(()) => ok(serde_json::json!({"path": path, "replaced": replaced})),
+            Err(error_value) => {
+                let rollback = if let Some(previous) = previous {
+                    assets::write(&state.plugin_root, path, &previous).map(|_| ())
+                } else {
+                    assets::remove(&state.plugin_root, path)
+                };
+                if let Err(rollback_error) = rollback {
+                    return asset_rollback_failed("write", &error_value, &rollback_error);
+                }
+                database_error(error_value)
+            }
+        },
+        Err(error_value) => asset_error(error_value),
+    }
+}
+
+fn remove_asset(body: &[u8], state: &AdminState, query: &Query) -> HttpResponse {
+    let Some(path) = query.get("path") else {
+        return invalid("缺少素材路径");
+    };
+    let request: ReasonRequest = match parse(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let summary = format!("asset:{path}:delete");
+    if !valid_reason(&request.reason) || !confirmed(&request.confirm, &summary) {
+        return confirmation_required(summary);
+    }
+    let previous = match assets::read(&state.plugin_root, path) {
+        Ok((bytes, _)) => bytes,
+        Err(error_value) => return asset_error(error_value),
+    };
+    match assets::remove(&state.plugin_root, path) {
+        Ok(()) => match audit_external(
+            state,
+            "asset.delete",
+            "asset",
+            path,
+            request.reason.trim(),
+            Some(serde_json::json!({"path": path})),
+            None,
+        ) {
+            Ok(()) => ok(serde_json::json!({"deleted": path})),
+            Err(error_value) => {
+                if let Err(rollback_error) = assets::write(&state.plugin_root, path, &previous) {
+                    return asset_rollback_failed("delete", &error_value, &rollback_error);
+                }
+                database_error(error_value)
+            }
+        },
+        Err(error_value) => asset_error(error_value),
+    }
+}
+
+fn export_assets(state: &AdminState, query: &Query) -> HttpResponse {
+    let reason = query.get("reason").unwrap_or("");
+    if !valid_reason(reason) {
+        return invalid("导出原因需为 2 至 200 个字符");
+    }
+    match assets::export(&state.plugin_root) {
+        Ok(bytes) => {
+            if let Err(error_value) = audit_external(
+                state,
+                "asset.export",
+                "asset_bundle",
+                "assets",
+                reason,
+                None,
+                Some(serde_json::json!({"bytes": bytes.len()})),
+            ) {
+                return database_error(error_value);
+            }
+            download(bytes, "application/zip", "luo-realm-assets.zip")
+        }
+        Err(error_value) => asset_error(error_value),
+    }
+}
+
+fn import_assets(body: &[u8], state: &AdminState, query: &Query) -> HttpResponse {
+    let (Some(reason), Some(confirm)) = (query.get("reason"), query.get("confirm")) else {
+        return invalid("导入原因或确认摘要不完整");
+    };
+    if !valid_reason(reason) || confirm != "assets:import" {
+        return confirmation_required("assets:import".into());
+    }
+    match assets::import(&state.plugin_root, body) {
+        Ok(summary) => {
+            let after = serde_json::json!({
+                "imported": summary.imported,
+                "replaced": summary.replaced
+            });
+            if let Err(error_value) = audit_external(
+                state,
+                "asset.import",
+                "asset_bundle",
+                "assets",
+                reason,
+                None,
+                Some(after.clone()),
+            ) {
+                if let Err(rollback_error) = assets::rollback_bundle_import(&state.plugin_root) {
+                    return asset_rollback_failed("import", &error_value, &rollback_error);
+                }
+                return database_error(error_value);
+            }
+            match assets::finalize_bundle_import(&state.plugin_root) {
+                Ok(()) => ok(after),
+                Err(error_value) => asset_error(error_value),
+            }
+        }
+        Err(error_value) => asset_error(error_value),
+    }
+}
+
+fn export_data(state: &AdminState, query: &Query) -> HttpResponse {
+    let reason = query.get("reason").unwrap_or("");
+    if !valid_reason(reason) {
+        return invalid("导出原因需为 2 至 200 个字符");
+    }
+    match transfer::export_database(&state.plugin_root, &state.database_path) {
+        Ok((name, bytes)) => {
+            if let Err(error_value) = audit_external(
+                state,
+                "database.export",
+                "database",
+                &name,
+                reason,
+                None,
+                Some(serde_json::json!({"bytes": bytes.len()})),
+            ) {
+                return database_error(error_value);
+            }
+            download(bytes, "application/vnd.sqlite3", &name)
+        }
+        Err(error_value) => transfer_error(error_value),
+    }
+}
+
+fn import_data(body: &[u8], state: &AdminState, query: &Query) -> HttpResponse {
+    let (Some(reason), Some(confirm)) = (query.get("reason"), query.get("confirm")) else {
+        return invalid("导入原因或确认摘要不完整");
+    };
+    if !valid_reason(reason) || confirm != "database:import" {
+        return confirmation_required("database:import".into());
+    }
+    match transfer::import_database(&state.plugin_root, &state.database_path, body, reason) {
+        Ok(result) => {
+            let after = serde_json::json!({"backup": result.backup_name});
+            ok(after)
+        }
+        Err(error_value) => transfer_error(error_value),
+    }
+}
+
+fn audit_external(
+    state: &AdminState,
+    action: &str,
+    target_type: &str,
+    target_id: &str,
+    reason: &str,
+    before: Option<serde_json::Value>,
+    after: Option<serde_json::Value>,
+) -> Result<(), DatabaseError> {
+    let mut database = Database::open_request(&state.database_path)?;
+    let transaction = database.immediate_transaction()?;
+    admin::audit_success(
+        &transaction,
+        admin::AuditEntry {
+            operator: "web",
+            action,
+            target_type,
+            target_id,
+            reason,
+            before,
+            after,
+        },
+    )?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)
+}
+
 #[derive(Deserialize)]
 struct TokenRequest {
     token: String,
@@ -688,6 +948,49 @@ fn database_error(error_value: DatabaseError) -> HttpResponse {
     error(status, code, message)
 }
 
+fn asset_error(error_value: assets::AssetError) -> HttpResponse {
+    match error_value {
+        assets::AssetError::NotFound => error(404, "asset_not_found", "素材不存在"),
+        assets::AssetError::InvalidPath => error(400, "invalid_asset_path", "素材路径不合法"),
+        assets::AssetError::UnsupportedType => {
+            error(400, "unsupported_asset", "仅支持 PNG 素材和 font.ttf 字体")
+        }
+        assets::AssetError::TooLarge => error(413, "asset_too_large", "素材或压缩包过大"),
+        assets::AssetError::InvalidImage => error(400, "invalid_image", "PNG 文件内容无效"),
+        assets::AssetError::InvalidArchive(_) => {
+            error(400, "invalid_asset_archive", "素材压缩包无效")
+        }
+        assets::AssetError::Storage(_) => error(500, "asset_storage_failed", "素材存储失败"),
+    }
+}
+
+fn asset_rollback_failed(
+    operation: &str,
+    audit_error: &DatabaseError,
+    rollback_error: &assets::AssetError,
+) -> HttpResponse {
+    eprintln!(
+        "[Luo Realm] asset {operation} audit failed ({audit_error}); rollback failed ({rollback_error})"
+    );
+    error(
+        500,
+        "asset_rollback_failed",
+        "素材操作与审计均未完成，且自动回滚失败；请立即检查素材目录",
+    )
+}
+
+fn transfer_error(error_value: transfer::TransferError) -> HttpResponse {
+    match error_value {
+        transfer::TransferError::InvalidSnapshot => {
+            error(400, "invalid_snapshot", "上传文件不是 SQLite 数据库快照")
+        }
+        transfer::TransferError::Storage(_) => {
+            error(500, "snapshot_storage_failed", "数据库快照存储失败")
+        }
+        transfer::TransferError::Database(error_value) => database_error(error_value),
+    }
+}
+
 struct Query(Vec<(String, String)>);
 
 impl Query {
@@ -727,7 +1030,7 @@ fn decode(value: &str) -> String {
         match bytes[index] {
             b'+' => decoded.push(b' '),
             b'%' if index + 2 < bytes.len() => {
-                if let Ok(byte) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
+                if let Some(byte) = decode_hex_pair(bytes[index + 1], bytes[index + 2]) {
                     decoded.push(byte);
                     index += 2;
                 } else {
@@ -739,4 +1042,17 @@ fn decode(value: &str) -> String {
         index += 1;
     }
     String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn decode_hex_pair(high: u8, low: u8) -> Option<u8> {
+    Some(hex_value(high)? * 16 + hex_value(low)?)
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }

@@ -1,6 +1,8 @@
+mod assets;
 pub mod auth;
 mod handlers;
 mod router;
+mod transfer;
 mod ui;
 
 use std::{
@@ -18,9 +20,19 @@ use crate::config::RuntimePolicy;
 
 use self::{auth::AdminToken, router::AdminState};
 
+const ADMIN_WORKERS: usize = 4;
+
 pub struct BoundServer {
     pub server: Server,
     pub port: u16,
+}
+
+pub(crate) fn recover_asset_import(plugin_root: &Path) -> io::Result<()> {
+    assets::recover_bundle_import(plugin_root).map_err(io::Error::other)
+}
+
+pub(crate) fn recover_database_import(plugin_root: &Path, database_path: &Path) -> io::Result<()> {
+    transfer::recover_database_import(plugin_root, database_path).map_err(io::Error::other)
 }
 
 pub fn candidate_ports(base: u16) -> impl Iterator<Item = u16> {
@@ -53,17 +65,31 @@ fn run(plugin_root: &Path, database_path: PathBuf, policy: RuntimePolicy) -> io:
         token,
         policy,
         port: bound.port,
+        operation_lock: std::sync::Mutex::new(()),
+        upload_lock: std::sync::Mutex::new(()),
     });
     eprintln!(
         "[Luo Realm] admin console: http://{}:{}",
         config.admin.bind, bound.port
     );
 
-    bound.server.incoming_requests().for_each(|mut request| {
-        let response = router::route(&mut request, &state);
-        if let Err(error) = request.respond(response) {
-            eprintln!("[Luo Realm] admin response failed: {error}");
-        }
+    let server = Arc::new(bound.server);
+    let workers = (0..ADMIN_WORKERS)
+        .map(|_| {
+            let server = Arc::clone(&server);
+            let state = Arc::clone(&state);
+            thread::spawn(move || {
+                server.incoming_requests().for_each(|mut request| {
+                    let response = router::route(&mut request, &state);
+                    if let Err(error) = request.respond(response) {
+                        eprintln!("[Luo Realm] admin response failed: {error}");
+                    }
+                });
+            })
+        })
+        .collect::<Vec<_>>();
+    workers.into_iter().for_each(|worker| {
+        let _ = worker.join();
     });
     Ok(())
 }

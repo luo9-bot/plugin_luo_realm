@@ -1,4 +1,4 @@
-mod assets;
+pub(crate) mod assets;
 mod battle;
 mod profile;
 

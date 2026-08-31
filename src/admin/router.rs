@@ -1,7 +1,7 @@
 use std::{
     io::{Cursor, Read},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex, TryLockError},
 };
 
 use tiny_http::{Header, Method, Request, Response, StatusCode};
@@ -11,6 +11,8 @@ use crate::{config::RuntimePolicy, database::Database};
 use super::{auth::AdminToken, handlers, ui};
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;
+const MAX_ASSET_BODY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_IMPORT_BODY_BYTES: usize = 128 * 1024 * 1024;
 
 pub struct AdminState {
     pub plugin_root: PathBuf,
@@ -19,6 +21,8 @@ pub struct AdminState {
     pub token: AdminToken,
     pub policy: RuntimePolicy,
     pub port: u16,
+    pub operation_lock: Mutex<()>,
+    pub upload_lock: Mutex<()>,
 }
 
 pub type HttpResponse = Response<Cursor<Vec<u8>>>;
@@ -31,6 +35,12 @@ pub fn route(request: &mut Request, state: &Arc<AdminState>) -> HttpResponse {
     if method == Method::Get && matches!(path, "/" | "/index.html") {
         return html(ui::HTML);
     }
+    if method == Method::Get && path == "/admin.css" {
+        return static_text(ui::CSS, "text/css; charset=utf-8");
+    }
+    if method == Method::Get && path == "/admin.js" {
+        return static_text(ui::JAVASCRIPT, "text/javascript; charset=utf-8");
+    }
     if method == Method::Get && path == "/api/health" {
         let database_ok = Database::open_request(&state.database_path).is_ok();
         return ok(serde_json::json!({
@@ -40,11 +50,11 @@ pub fn route(request: &mut Request, state: &Arc<AdminState>) -> HttpResponse {
         }));
     }
 
-    let body = match read_body(request) {
-        Ok(body) => body,
-        Err(response) => return response,
-    };
     if method == Method::Post && path == "/api/login" {
+        let body = match read_body(request, MAX_BODY_BYTES) {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
         let value: serde_json::Value = match serde_json::from_slice(&body) {
             Ok(value) => value,
             Err(_) => return error(400, "invalid_json", "请求必须是合法 JSON"),
@@ -63,22 +73,60 @@ pub fn route(request: &mut Request, state: &Arc<AdminState>) -> HttpResponse {
         return error(401, "unauthorized", "缺少或无效的管理 Token");
     }
 
+    let _upload = if requires_upload_slot(&method, path) {
+        match state.upload_lock.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(TryLockError::WouldBlock) => {
+                return error(429, "upload_busy", "已有上传任务正在处理，请稍后重试");
+            }
+            Err(TryLockError::Poisoned(_)) => {
+                return error(503, "admin_unavailable", "上传操作锁不可用，请重启插件");
+            }
+        }
+    } else {
+        None
+    };
+    let body = match read_body(request, body_limit(path)) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+
+    let _operation = match state.operation_lock.lock() {
+        Ok(guard) => guard,
+        Err(_) => return error(503, "admin_unavailable", "后台操作锁不可用，请重启插件"),
+    };
     handlers::dispatch(&method, &url, &body, state)
 }
 
-fn read_body(request: &mut Request) -> Result<Vec<u8>, HttpResponse> {
-    if request.body_length().unwrap_or(0) > MAX_BODY_BYTES {
-        return Err(error(413, "body_too_large", "请求体不能超过 1 MiB"));
+fn requires_upload_slot(method: &Method, path: &str) -> bool {
+    method == &Method::Post
+        && matches!(
+            path,
+            "/api/assets/file" | "/api/assets/import" | "/api/data/import"
+        )
+}
+
+fn read_body(request: &mut Request, limit: usize) -> Result<Vec<u8>, HttpResponse> {
+    if request.body_length().unwrap_or(0) > limit {
+        return Err(error(413, "body_too_large", "请求体超过该接口允许的大小"));
     }
     let mut body = Vec::new();
-    let mut reader = request.as_reader().take((MAX_BODY_BYTES + 1) as u64);
+    let mut reader = request.as_reader().take((limit + 1) as u64);
     if std::io::Read::read_to_end(&mut reader, &mut body).is_err() {
         return Err(error(400, "read_failed", "无法读取请求体"));
     }
-    if body.len() > MAX_BODY_BYTES {
-        return Err(error(413, "body_too_large", "请求体不能超过 1 MiB"));
+    if body.len() > limit {
+        return Err(error(413, "body_too_large", "请求体超过该接口允许的大小"));
     }
     Ok(body)
+}
+
+fn body_limit(path: &str) -> usize {
+    match path {
+        "/api/assets/import" | "/api/data/import" => MAX_IMPORT_BODY_BYTES,
+        "/api/assets/file" => MAX_ASSET_BODY_BYTES,
+        _ => MAX_BODY_BYTES,
+    }
 }
 
 fn authenticated(request: &Request, token: &AdminToken) -> bool {
@@ -117,7 +165,35 @@ fn html(content: &str) -> HttpResponse {
             .with_header(header("Content-Type", "text/html; charset=utf-8"))
             .with_header(header(
                 "Content-Security-Policy",
-                "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:",
+                "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'",
+            )),
+    )
+}
+
+fn static_text(content: &str, content_type: &str) -> HttpResponse {
+    secure_headers(
+        Response::from_data(content.as_bytes().to_vec())
+            .with_header(header("Content-Type", content_type)),
+    )
+}
+
+pub fn binary(bytes: Vec<u8>, content_type: &str) -> HttpResponse {
+    secure_headers(Response::from_data(bytes).with_header(header("Content-Type", content_type)))
+}
+
+pub fn download(bytes: Vec<u8>, content_type: &str, filename: &str) -> HttpResponse {
+    let safe_name = filename
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+        .collect::<String>();
+    secure_headers(
+        Response::from_data(bytes)
+            .with_header(header("Content-Type", content_type))
+            .with_header(header(
+                "Content-Disposition",
+                &format!("attachment; filename=\"{safe_name}\""),
             )),
     )
 }
