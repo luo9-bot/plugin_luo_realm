@@ -574,7 +574,7 @@ dependencies = [
 
 [[package]]
 name = "luo_realm"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "ab_glyph",
  "base64",
