@@ -1,23 +1,38 @@
 use std::{
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     path::Path,
     sync::{Arc, RwLock},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::identity;
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RuntimeConfig {
+    pub schema_version: u32,
+    pub version_salt: String,
     pub command: CommandConfig,
     pub admin: AdminConfig,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            version_salt: "luo-realm-v1".into(),
+            command: CommandConfig::default(),
+            admin: AdminConfig::default(),
+        }
+    }
 }
 
 impl RuntimeConfig {
     pub fn load(plugin_root: &Path) -> Result<Self, ConfigError> {
         let path = plugin_root.join("config").join("config.toml");
+        recover_file(&path)?;
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -30,23 +45,134 @@ impl RuntimeConfig {
             path: path.clone(),
             source: Box::new(source),
         })?;
-        if config.command.prefix.trim().is_empty() {
-            return Err(ConfigError::EmptyPrefix(path));
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn save(&self, plugin_root: &Path) -> Result<(), ConfigError> {
+        self.validate()?;
+        let path = plugin_root.join("config").join("config.toml");
+        let temporary = path.with_extension("toml.new");
+        let content = toml::to_string_pretty(self)
+            .map_err(|error| ConfigError::Serialize(Box::new(error)))?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+                path: path.clone(),
+                source,
+            })?;
         }
-        if config.admin.bind.trim().is_empty() {
-            return Err(ConfigError::InvalidAdmin("bind cannot be empty".into()));
-        }
-        if config.admin.port > 65_526 {
+        replace_file(&path, &temporary, content.as_bytes())
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.command.prefix.trim().is_empty() || self.command.prefix.chars().count() > 32 {
             return Err(ConfigError::InvalidAdmin(
-                "port must leave room for ten attempts".into(),
+                "command prefix must contain 1 to 32 characters".into(),
             ));
         }
-
-        Ok(config)
+        if self.admin.bind.trim().is_empty() {
+            return Err(ConfigError::InvalidAdmin("bind cannot be empty".into()));
+        }
+        if !(1..=65_526).contains(&self.admin.port) {
+            return Err(ConfigError::InvalidAdmin(
+                "port must be between 1 and 65526".into(),
+            ));
+        }
+        if self.admin.admin_ids.contains(&0) {
+            return Err(ConfigError::InvalidAdmin(
+                "administrator IDs must be positive".into(),
+            ));
+        }
+        let unique = self
+            .admin
+            .admin_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>();
+        if unique.len() != self.admin.admin_ids.len() {
+            return Err(ConfigError::InvalidAdmin(
+                "administrator IDs must not be duplicated".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+fn replace_file(path: &Path, temporary: &Path, content: &[u8]) -> Result<(), ConfigError> {
+    let backup = path.with_extension("toml.bak");
+    if temporary.exists() {
+        fs::remove_file(temporary).map_err(|source| ConfigError::Write {
+            path: temporary.to_path_buf(),
+            source,
+        })?;
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temporary)
+        .map_err(|source| ConfigError::Write {
+            path: temporary.to_path_buf(),
+            source,
+        })?;
+    file.write_all(content)
+        .and_then(|()| file.sync_all())
+        .map_err(|source| ConfigError::Write {
+            path: temporary.to_path_buf(),
+            source,
+        })?;
+    drop(file);
+
+    if backup.exists() {
+        fs::remove_file(&backup).map_err(|source| ConfigError::Write {
+            path: backup.clone(),
+            source,
+        })?;
+    }
+    if path.exists() {
+        fs::rename(path, &backup).map_err(|source| ConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    }
+    if let Err(source) = fs::rename(temporary, path) {
+        let _ = fs::rename(&backup, path);
+        return Err(ConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    if backup.exists() {
+        fs::remove_file(&backup).map_err(|source| ConfigError::Write {
+            path: backup,
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+fn recover_file(path: &Path) -> Result<(), ConfigError> {
+    let temporary = path.with_extension("toml.new");
+    let backup = path.with_extension("toml.bak");
+    if !path.exists() && backup.exists() {
+        fs::rename(&backup, path).map_err(|source| ConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    } else if path.exists() && backup.exists() {
+        fs::remove_file(&backup).map_err(|source| ConfigError::Write {
+            path: backup,
+            source,
+        })?;
+    }
+    if temporary.exists() {
+        fs::remove_file(&temporary).map_err(|source| ConfigError::Write {
+            path: temporary,
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AdminConfig {
     pub enabled: bool,
@@ -93,7 +219,7 @@ impl RuntimePolicy {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CommandConfig {
     pub prefix_enabled: bool,
@@ -132,15 +258,22 @@ pub enum ConfigError {
         path: std::path::PathBuf,
         source: Box<toml::de::Error>,
     },
-    #[error("command prefix cannot be empty in {0}")]
-    EmptyPrefix(std::path::PathBuf),
+    #[error("failed to serialize configuration: {0}")]
+    Serialize(Box<toml::ser::Error>),
+    #[error("failed to write config {path}: {source}")]
+    Write {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
     #[error("invalid admin configuration: {0}")]
     InvalidAdmin(String),
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CommandConfig;
+    use std::fs;
+
+    use super::{CommandConfig, RuntimeConfig};
 
     #[test]
     fn prefix_is_optional_by_default() {
@@ -159,5 +292,42 @@ mod tests {
 
         assert_eq!(config.command_text("签到"), None);
         assert_eq!(config.command_text("!realm 签到"), Some("签到"));
+    }
+
+    #[test]
+    fn save_replaces_existing_config_and_recovers_interruption() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = RuntimeConfig::default();
+        config.save(directory.path()).unwrap();
+
+        let mut changed = config.clone();
+        changed.command.prefix = "!lr".into();
+        changed.save(directory.path()).unwrap();
+        assert_eq!(
+            RuntimeConfig::load(directory.path())
+                .unwrap()
+                .command
+                .prefix,
+            "!lr"
+        );
+
+        let path = directory.path().join("config").join("config.toml");
+        let backup = path.with_extension("toml.bak");
+        let temporary = path.with_extension("toml.new");
+        fs::rename(&path, &backup).unwrap();
+        fs::write(&temporary, "incomplete").unwrap();
+
+        let recovered = RuntimeConfig::load(directory.path()).unwrap();
+        assert_eq!(recovered.command.prefix, "!lr");
+        assert!(!backup.exists());
+        assert!(!temporary.exists());
+    }
+
+    #[test]
+    fn invalid_admin_port_is_rejected() {
+        let mut config = RuntimeConfig::default();
+        config.admin.port = 0;
+
+        assert!(config.validate().is_err());
     }
 }

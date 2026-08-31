@@ -1,4 +1,5 @@
 pub mod activity;
+pub mod admin;
 pub mod combat;
 pub mod cultivation;
 pub mod destiny;

@@ -1,4 +1,8 @@
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, backup::Backup};
 
@@ -9,6 +13,7 @@ use super::{
 
 pub struct Database {
     connection: Connection,
+    path: PathBuf,
 }
 
 impl Database {
@@ -28,7 +33,22 @@ impl Database {
         migrations::apply(&mut connection)?;
         check_integrity(&connection)?;
 
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub fn open_request(path: impl AsRef<Path>) -> DatabaseResult<Self> {
+        let path = path.as_ref();
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(DatabaseError::from_sqlite)?;
+        configure(&connection)?;
+
+        Ok(Self {
+            connection,
+            path: path.to_path_buf(),
+        })
     }
 
     pub fn immediate_transaction(&mut self) -> DatabaseResult<Transaction<'_>> {
@@ -39,6 +59,10 @@ impl Database {
 
     pub fn connection(&self) -> &Connection {
         &self.connection
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn local_date(&self) -> DatabaseResult<String> {

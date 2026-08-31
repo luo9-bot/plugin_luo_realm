@@ -36,10 +36,19 @@ Desktop.ini
 # Codex 本地状态不得提交
 .codex/
 
-tests/
+# 项目规则禁止提交的设计草稿与测试文件
+.docs/
+**/.docs/
 
+tests/
 test/
+**/tests/
+**/test/
+**/test_*.rs
+**/*_test.rs
+**/*_tests.rs
+**/tests.rs
+*.snap
 
 tools/
-
 tool/

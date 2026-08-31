@@ -18,6 +18,8 @@ pub enum DatabaseError {
     Migration(String),
     #[error("numeric identifier is outside SQLite INTEGER range")]
     InvalidIdentifier,
+    #[error("invalid data: {0}")]
+    InvalidData(String),
 }
 
 impl DatabaseError {
