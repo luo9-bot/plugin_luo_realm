@@ -42,6 +42,8 @@ Desktop.ini
 # 项目规则禁止提交的设计草稿与测试文件
 .docs/
 **/.docs/
+docs/
+**/docs/
 
 tests/
 test/
