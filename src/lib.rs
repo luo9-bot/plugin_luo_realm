@@ -10,7 +10,7 @@ mod render;
 
 use std::{path::Path, thread, time::Duration};
 
-use config::{CommandConfig, RuntimeConfig};
+use config::{CommandConfig, RuntimeConfig, RuntimePolicy};
 use database::{Database, DatabaseError};
 use luo9_sdk::{
     bus::Bus,
@@ -19,6 +19,69 @@ use luo9_sdk::{
 };
 
 use crate::core::{simulate_combat, stable_seed};
+
+#[derive(Clone, Copy)]
+pub enum IncomingContext {
+    Group { group_id: u64 },
+    Private,
+}
+
+#[derive(Clone, Copy)]
+enum CommandFeature {
+    General,
+    Event,
+    Combat,
+}
+
+impl CommandFeature {
+    fn from_message(message: &str, command: &CommandConfig) -> Self {
+        let text = command.command_text(message).unwrap_or_default();
+        match text.split_whitespace().next() {
+            Some("每日事件" | "事件" | "event") => Self::Event,
+            Some("决斗" | "duel") => Self::Combat,
+            _ => Self::General,
+        }
+    }
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Event => "event",
+            Self::Combat => "combat",
+        }
+    }
+}
+
+pub fn route_message(
+    database: &mut Database,
+    root: &Path,
+    policy: &RuntimePolicy,
+    context: IncomingContext,
+    user_id: u64,
+    message: &str,
+) -> Result<Option<String>, DatabaseError> {
+    let config = policy.snapshot();
+    let group_id = match context {
+        IncomingContext::Group { group_id } => {
+            if !database::group::is_enabled(database.connection(), group_id)? {
+                return Ok(None);
+            }
+            let feature = CommandFeature::from_message(message, &config.command);
+            if !database::group::feature_enabled(database.connection(), group_id, feature.code())? {
+                return Ok(None);
+            }
+            group_id
+        }
+        IncomingContext::Private => {
+            if !config.admin.admin_ids.contains(&user_id) {
+                return Ok(None);
+            }
+            0
+        }
+    };
+
+    handle_message_with_config(database, root, group_id, user_id, message, &config.command)
+}
 
 pub fn handle_message(
     database: &mut Database,
@@ -276,6 +339,7 @@ pub extern "C" fn plugin_main() {
             return;
         }
     };
+    let policy = RuntimePolicy::new(config);
     let mut database = match Database::open(paths::database_path()) {
         Ok(database) => database,
         Err(error) => {
@@ -293,13 +357,18 @@ pub extern "C" fn plugin_main() {
             && let Some(BusPayload::Message(message)) = BusPayload::parse(&json)
         {
             let group_id = message.group_id.unwrap_or(0);
-            match handle_message_with_config(
+            let context = if message.message_type == MsgType::Group {
+                IncomingContext::Group { group_id }
+            } else {
+                IncomingContext::Private
+            };
+            match route_message(
                 &mut database,
                 &root,
-                group_id,
+                &policy,
+                context,
                 message.user_id,
                 &message.message,
-                &config.command,
             ) {
                 Ok(Some(reply)) if message.message_type == MsgType::Group => {
                     let _ = send::send_group_msg(group_id, &reply);
