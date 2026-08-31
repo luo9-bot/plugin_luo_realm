@@ -32,26 +32,25 @@ pub fn apply(connection: &mut Connection) -> DatabaseResult<()> {
         0
     };
 
-    for &(version, sql) in MIGRATIONS {
-        if version <= current_version {
-            continue;
-        }
-        let transaction = connection
-            .transaction()
-            .map_err(DatabaseError::from_sqlite)?;
-        transaction
-            .execute_batch(sql)
-            .map_err(|error| DatabaseError::Migration(error.to_string()))?;
-        transaction
-            .execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES(?1, ?2)",
-                params![version, unix_timestamp()],
-            )
-            .map_err(DatabaseError::from_sqlite)?;
-        transaction.commit().map_err(DatabaseError::from_sqlite)?;
-    }
-
-    Ok(())
+    MIGRATIONS
+        .iter()
+        .copied()
+        .filter(|(version, _)| *version > current_version)
+        .try_for_each(|(version, sql)| {
+            let transaction = connection
+                .transaction()
+                .map_err(DatabaseError::from_sqlite)?;
+            transaction
+                .execute_batch(sql)
+                .map_err(|error| DatabaseError::Migration(error.to_string()))?;
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES(?1, ?2)",
+                    params![version, unix_timestamp()],
+                )
+                .map_err(DatabaseError::from_sqlite)?;
+            transaction.commit().map_err(DatabaseError::from_sqlite)
+        })
 }
 
 fn unix_timestamp() -> i64 {

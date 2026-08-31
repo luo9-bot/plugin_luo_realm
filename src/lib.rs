@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod config;
 pub mod core;
 pub mod cultivation;
@@ -347,6 +348,9 @@ pub extern "C" fn plugin_main() {
             return;
         }
     };
+    if policy.snapshot().admin.enabled {
+        let _admin_thread = admin::start(root.clone(), paths::database_path(), policy.clone());
+    }
     let topic = Bus::topic("luo9_message");
     let Ok(subscriber) = topic.subscribe() else {
         return;

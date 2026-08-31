@@ -59,7 +59,7 @@ pub fn battle(result: &CombatResult, path: &Path) -> io::Result<()> {
     encoder
         .set_repeat(Repeat::Infinite)
         .map_err(io::Error::other)?;
-    for index in 0..=result.rounds.min(12) {
+    (0..=result.rounds.min(12)).try_for_each(|index| {
         let mut image = canvas();
         let progress = index as f32 / result.rounds.max(1) as f32;
         let left_won = result.left_hp >= result.right_hp;
@@ -74,7 +74,6 @@ pub fn battle(result: &CombatResult, path: &Path) -> io::Result<()> {
                 0,
                 Delay::from_numer_denom_ms(450, 1),
             ))
-            .map_err(io::Error::other)?;
-    }
-    Ok(())
+            .map_err(io::Error::other)
+    })
 }
