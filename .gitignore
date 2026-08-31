@@ -1,0 +1,45 @@
+# Rust 构建产物
+/target/
+
+# 插件运行时数据与生成内容
+/data/
+/assets/
+/logs/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.bak
+*.tmp
+*.lock
+!Cargo.lock
+
+# Python 离线工具缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# 本地配置和密钥
+.env
+.env.*
+!.env.example
+
+# 编辑器和系统文件
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Codex 本地状态不得提交
+.codex/
+
+tests/
+
+test/
+
+tools/
+
+tool/

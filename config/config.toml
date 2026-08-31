@@ -1,0 +1,6 @@
+schema_version = 1
+version_salt = "luo-realm-v1"
+
+[command]
+prefix_enabled = false
+prefix = "/lr"

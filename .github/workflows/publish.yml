@@ -1,0 +1,82 @@
+# Luo Realm 插件手动发布 workflow
+# 自动发布由 build.yml 的 notify-registry job 处理
+# 此文件仅用于手动触发（workflow_dispatch）
+name: Publish Luo Realm to Registry (Manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 插件仓库
+        uses: actions/checkout@v4
+
+      - name: 获取 App Token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: registry
+
+      - name: 读取 Cargo.toml 信息
+        id: meta
+        run: |
+          CRATE_NAME=$(grep '^name' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+          DESCRIPTION=$(grep '^description' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+          SDK_VERSION=$(grep 'luo9_sdk' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          TAGS=$(sed -n '/\[package\.metadata\]/,/^\[/p' Cargo.toml | grep '^tags' | sed 's/^tags *= *//')
+          [ -z "$TAGS" ] && TAGS="[]"
+          [ -z "$DESCRIPTION" ] && DESCRIPTION="$CRATE_NAME"
+          [ -z "$SDK_VERSION" ] && SDK_VERSION="unknown"
+          echo "crate_name=$CRATE_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
+          echo "sdk_version=$SDK_VERSION" >> $GITHUB_OUTPUT
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+
+      - name: 设置资产名称
+        id: reg
+        run: |
+          CRATE_NAME="${{ steps.meta.outputs.crate_name }}"
+          echo "linux_asset=lib${CRATE_NAME}.so" >> $GITHUB_OUTPUT
+          echo "windows_asset=${CRATE_NAME}.dll" >> $GITHUB_OUTPUT
+
+      - name: 通知注册表
+        run: |
+          TAG="v${{ steps.meta.outputs.version }}"
+
+          curl -X POST \
+            -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/luo9-bot/registry/dispatches \
+            -d "$(jq -n \
+              --arg event "plugin-publish" \
+              --arg name "${{ steps.meta.outputs.crate_name }}" \
+              --arg version "${{ steps.meta.outputs.version }}" \
+              --arg description "${{ steps.meta.outputs.description }}" \
+              --arg sdk_version "${{ steps.meta.outputs.sdk_version }}" \
+              --arg tag "$TAG" \
+              --arg repo "${{ github.repository }}" \
+              --arg windows "${{ steps.reg.outputs.windows_asset }}" \
+              --arg linux "${{ steps.reg.outputs.linux_asset }}" \
+              --argjson tags '${{ steps.meta.outputs.tags }}' \
+              '{
+                event_type: $event,
+                client_payload: {
+                  name: $name,
+                  version: $version,
+                  description: $description,
+                  sdk_version: $sdk_version,
+                  tag: $tag,
+                  repo: $repo,
+                  tags: $tags,
+                  assets: {
+                    "windows-x86_64": $windows,
+                    "linux-x86_64": $linux
+                  }
+                }
+              }')"

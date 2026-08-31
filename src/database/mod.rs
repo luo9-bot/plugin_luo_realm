@@ -1,0 +1,28 @@
+pub mod activity;
+pub mod combat;
+pub mod cultivation;
+pub mod destiny;
+pub mod error;
+pub mod group;
+pub mod inventory;
+pub mod player;
+pub mod wallet;
+
+mod connection;
+mod migrations;
+
+pub use connection::Database;
+pub use error::{DatabaseError, DatabaseResult};
+
+pub(crate) fn player_id(value: u64) -> DatabaseResult<i64> {
+    i64::try_from(value).map_err(|_| DatabaseError::InvalidIdentifier)
+}
+
+pub(crate) fn unix_timestamp() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
