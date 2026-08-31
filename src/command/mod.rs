@@ -1,0 +1,456 @@
+mod registration;
+
+use std::path::Path;
+
+use rusqlite::Transaction;
+
+use crate::{
+    config::CommandConfig,
+    core::{Combatant, Player, simulate_combat, stable_seed},
+    database::{self, Database, DatabaseError},
+    engine, identity, render,
+};
+
+const UNREGISTERED_MESSAGE: &str = "尚未注册，请发送“注册 <名称>”创建角色。";
+const PENDING_SYSTEM_MESSAGE: &str = "角色尚未确定修行体系，请发送“体系”查看并选择。";
+const UNAVAILABLE_MESSAGE: &str = "当前角色已被停用，请联系管理员。";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AccessLevel {
+    Public,
+    Named,
+    Active,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Command {
+    Menu,
+    Systems,
+    Register,
+    SelectSystem,
+    Power,
+    Profile,
+    CheckIn,
+    Event,
+    Ranking,
+    Rename,
+    Duel,
+}
+
+impl Command {
+    fn parse(keyword: &str) -> Option<Self> {
+        match keyword {
+            "菜单" | "帮助" | "help" => Some(Self::Menu),
+            "体系" | "修行" | "cultivation" => Some(Self::Systems),
+            "注册" | "register" => Some(Self::Register),
+            "选择体系" | "system" => Some(Self::SelectSystem),
+            "战力" | "power" => Some(Self::Power),
+            "状态" | "属性" | "profile" | "查询" => Some(Self::Profile),
+            "签到" | "刻印" | "checkin" => Some(Self::CheckIn),
+            "每日事件" | "事件" | "event" => Some(Self::Event),
+            "排行" | "ranking" => Some(Self::Ranking),
+            "改名" | "name" => Some(Self::Rename),
+            "决斗" | "duel" => Some(Self::Duel),
+            _ => None,
+        }
+    }
+
+    fn access(self) -> AccessLevel {
+        match self {
+            Self::Menu | Self::Systems | Self::Register => AccessLevel::Public,
+            Self::SelectSystem | Self::Rename => AccessLevel::Named,
+            _ => AccessLevel::Active,
+        }
+    }
+
+    pub fn feature_code(self) -> &'static str {
+        match self {
+            Self::Event => "event",
+            Self::Duel => "combat",
+            _ => "general",
+        }
+    }
+}
+
+pub fn feature_code(message: &str, config: &CommandConfig) -> &'static str {
+    config
+        .command_text(message)
+        .and_then(|text| text.split_whitespace().next())
+        .and_then(Command::parse)
+        .map(Command::feature_code)
+        .unwrap_or("general")
+}
+
+pub fn handle_message(
+    database: &mut Database,
+    root: &Path,
+    group_id: u64,
+    user_id: u64,
+    message: &str,
+    command_config: &CommandConfig,
+) -> Result<Option<String>, DatabaseError> {
+    let Some(text) = command_config.command_text(message) else {
+        return Ok(None);
+    };
+    let arguments = text.split_whitespace().collect::<Vec<_>>();
+    let Some(command) = arguments
+        .first()
+        .and_then(|keyword| Command::parse(keyword))
+    else {
+        return Ok(None);
+    };
+    let state = database::player::registration_state(database.connection(), user_id)?;
+    if let Some(message) = denied_message(state, command.access()) {
+        return Ok(Some(message.into()));
+    }
+
+    dispatch(command, &arguments[1..], database, root, group_id, user_id).map(Some)
+}
+
+fn denied_message(
+    state: database::player::RegistrationState,
+    access: AccessLevel,
+) -> Option<&'static str> {
+    use database::player::RegistrationState;
+
+    match (state, access) {
+        (RegistrationState::Unavailable, _) => Some(UNAVAILABLE_MESSAGE),
+        (RegistrationState::Missing, AccessLevel::Named | AccessLevel::Active) => {
+            Some(UNREGISTERED_MESSAGE)
+        }
+        (RegistrationState::PendingSystem, AccessLevel::Active) => Some(PENDING_SYSTEM_MESSAGE),
+        _ => None,
+    }
+}
+
+fn dispatch(
+    command: Command,
+    arguments: &[&str],
+    database: &mut Database,
+    root: &Path,
+    group_id: u64,
+    user_id: u64,
+) -> Result<String, DatabaseError> {
+    match command {
+        Command::Menu => Ok(format!(
+            "{}：注册 / 体系 / 选择体系 / 签到 / 状态 / 战力 / 每日事件 / 决斗 / 排行 / 改名",
+            identity::PRODUCT_NAME
+        )),
+        Command::Systems => Ok(format!("可选修行体系：{}", registration::system_catalog())),
+        Command::Register => registration::register(database, user_id, arguments),
+        Command::SelectSystem => registration::select_system(database, user_id, arguments),
+        Command::Rename => registration::rename(database, user_id, arguments),
+        Command::Power => power(database, user_id),
+        Command::Profile => profile(database, root, user_id),
+        Command::CheckIn => check_in(database, user_id),
+        Command::Event => event(database, group_id, user_id),
+        Command::Ranking => ranking(database),
+        Command::Duel => duel(database, root, group_id, user_id, arguments),
+    }
+}
+
+fn active_player(transaction: &Transaction<'_>, user_id: u64) -> Result<Player, DatabaseError> {
+    database::player::get_active(transaction, user_id)?.ok_or_else(|| {
+        DatabaseError::InvalidData("active player is missing cultivation data".into())
+    })
+}
+
+fn power(database: &mut Database, user_id: u64) -> Result<String, DatabaseError> {
+    let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    let player = active_player(&transaction, user_id)?;
+    let cultivation = database::cultivation::get(&transaction, user_id)?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    let profile = engine::build_combat_profile(
+        &player,
+        &cultivation.system_id,
+        cultivation.realm_index,
+        &date,
+    );
+    let system = engine::find_system(&cultivation.system_id)
+        .ok_or_else(|| DatabaseError::InvalidData("unknown player cultivation system".into()))?;
+    let realm = system
+        .realms()
+        .get(cultivation.realm_index as usize)
+        .map(|realm| realm.name)
+        .unwrap_or("未知境界");
+    Ok(format!(
+        "当前战力：{:.0}（{}·{}）",
+        profile.power,
+        system.name(),
+        realm
+    ))
+}
+
+fn profile(database: &mut Database, root: &Path, user_id: u64) -> Result<String, DatabaseError> {
+    let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    let player = active_player(&transaction, user_id)?;
+    let cultivation = database::cultivation::get(&transaction, user_id)?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    let system = engine::find_system(&cultivation.system_id)
+        .ok_or_else(|| DatabaseError::InvalidData("unknown player cultivation system".into()))?;
+    let realm_name = system
+        .realms()
+        .get(cultivation.realm_index as usize)
+        .map(|realm| realm.name)
+        .unwrap_or("未知境界");
+    let combat_profile = engine::build_combat_profile(
+        &player,
+        &cultivation.system_id,
+        cultivation.realm_index,
+        &date,
+    );
+    let image = root
+        .join(identity::DATA_DIRECTORY)
+        .join("cards")
+        .join(format!("{user_id}.png"));
+    let summary = format!(
+        "{} · {}·{}\n等级 {} 修为 {} 战力 {:.0}\nHP {} 攻击 {} 防御 {} 速度 {}\n金币 {} 刻印 {} 胜/负 {}/{}",
+        player.display_name,
+        system.name(),
+        realm_name,
+        player.level,
+        cultivation.progress,
+        combat_profile.power,
+        player.base_hp,
+        player.base_attack,
+        player.base_defense,
+        player.speed,
+        player.coins,
+        player.marks,
+        player.wins,
+        player.losses
+    );
+    let render_data = render::ProfileRenderData {
+        player: &player,
+        system_id: &cultivation.system_id,
+        system_name: system.name(),
+        realm_name,
+        realm_index: cultivation.realm_index,
+        progress: cultivation.progress,
+        power: combat_profile.power,
+    };
+    Ok(match render::profile(root, &render_data, &image) {
+        Ok(()) => format!("{summary}\n[CQ:image,file={}]", image.display()),
+        Err(error) => {
+            eprintln!("[Luo Realm] profile rendering failed: {error}");
+            summary
+        }
+    })
+}
+
+fn check_in(database: &mut Database, user_id: u64) -> Result<String, DatabaseError> {
+    let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    active_player(&transaction, user_id)?;
+    let result = database::activity::check_in(&transaction, user_id, &date)?;
+    let reply = match result {
+        database::activity::CheckInResult::Completed { streak, reward } => {
+            database::wallet::credit(
+                &transaction,
+                user_id,
+                "marks",
+                2,
+                "daily_checkin",
+                &format!("checkin:{user_id}:{date}:marks"),
+            )?;
+            format!(
+                "签到成功！连续 {streak} 天，金币 +100，刻印 +2。当前金币 {}。",
+                reward.balance_after
+            )
+        }
+        database::activity::CheckInResult::AlreadyCompleted => "今天已经签到过了。".into(),
+    };
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    Ok(reply)
+}
+
+fn event(database: &mut Database, group_id: u64, user_id: u64) -> Result<String, DatabaseError> {
+    let date = database.local_date()?;
+    let seed = stable_seed(
+        &date,
+        "event",
+        &format!("{group_id}:{user_id}"),
+        identity::VERSION_SALT,
+    );
+    let definition = engine::event::daily_event(seed);
+    let transaction = database.immediate_transaction()?;
+    active_player(&transaction, user_id)?;
+    let persisted = database::destiny::daily_event(
+        &transaction,
+        user_id,
+        &date,
+        definition,
+        &seed.to_string(),
+    )?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    Ok(format!("今日机缘：{persisted}"))
+}
+
+fn ranking(database: &Database) -> Result<String, DatabaseError> {
+    let entries = database::group::ranking(database.connection(), 8)?;
+    if entries.is_empty() {
+        return Ok("暂无排行数据。".into());
+    }
+    Ok(entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| format!("{}. {entry}", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+fn duel(
+    database: &mut Database,
+    root: &Path,
+    group_id: u64,
+    user_id: u64,
+    arguments: &[&str],
+) -> Result<String, DatabaseError> {
+    let Some(target_id) = arguments
+        .first()
+        .map(|argument| {
+            argument
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>()
+        })
+        .and_then(|target| target.parse::<u64>().ok())
+        .filter(|target| *target != user_id)
+    else {
+        return Ok("请指定另一位有效玩家。".into());
+    };
+
+    let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    let left = active_player(&transaction, user_id)?;
+    let Some(right) = database::player::get_active(&transaction, target_id)? else {
+        return Ok("对方尚未完成角色注册，无法决斗。".into());
+    };
+    let left_cultivation = database::cultivation::get(&transaction, user_id)?;
+    let right_cultivation = database::cultivation::get(&transaction, target_id)?;
+    let left_system_name = engine::find_system(&left_cultivation.system_id)
+        .map(|system| system.name())
+        .ok_or_else(|| DatabaseError::InvalidData("unknown left cultivation system".into()))?;
+    let right_system_name = engine::find_system(&right_cultivation.system_id)
+        .map(|system| system.name())
+        .ok_or_else(|| DatabaseError::InvalidData("unknown right cultivation system".into()))?;
+    if group_id != 0 {
+        database::group::ensure(&transaction, group_id)?;
+    }
+    let seed = stable_seed(
+        &date,
+        "duel",
+        &format!("{group_id}:{user_id}:{target_id}"),
+        identity::VERSION_SALT,
+    );
+    let left_profile = engine::build_combat_profile(
+        &left,
+        &left_cultivation.system_id,
+        left_cultivation.realm_index,
+        &date,
+    );
+    let right_profile = engine::build_combat_profile(
+        &right,
+        &right_cultivation.system_id,
+        right_cultivation.realm_index,
+        &date,
+    );
+    let result = simulate_combat(
+        Combatant {
+            player: &left_profile.player,
+            skills: left_profile.skills,
+        },
+        Combatant {
+            player: &right_profile.player,
+            skills: right_profile.skills,
+        },
+        seed,
+        30,
+    );
+    database::combat::record_duel(
+        &transaction,
+        group_id,
+        database::combat::DuelParticipant {
+            user_id,
+            system_id: &left_cultivation.system_id,
+            realm_index: left_cultivation.realm_index,
+            power_before: left_profile.power,
+            hp_before: left_profile.player.base_hp,
+        },
+        database::combat::DuelParticipant {
+            user_id: target_id,
+            system_id: &right_cultivation.system_id,
+            realm_index: right_cultivation.realm_index,
+            power_before: right_profile.power,
+            hp_before: right_profile.player.base_hp,
+        },
+        &result,
+    )?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+
+    let image = root
+        .join(identity::DATA_DIRECTORY)
+        .join("battles")
+        .join(format!("{group_id}-{user_id}-{target_id}.gif"));
+    let winner_name = if result.winner_id == left_profile.player.user_id {
+        &left_profile.player.display_name
+    } else {
+        &right_profile.player.display_name
+    };
+    let report = battle_report(
+        &result,
+        &left_profile.player,
+        &right_profile.player,
+        winner_name,
+    );
+    let render_data = render::BattleRenderData {
+        left: &left_profile,
+        right: &right_profile,
+        left_system: left_system_name,
+        right_system: right_system_name,
+        result: &result,
+    };
+    Ok(match render::battle(root, &render_data, &image) {
+        Ok(()) => format!("{report}\n[CQ:image,file={}]", image.display()),
+        Err(error) => {
+            eprintln!("[Luo Realm] battle rendering failed: {error}");
+            report
+        }
+    })
+}
+
+fn battle_report(
+    result: &crate::core::CombatResult,
+    left: &Player,
+    right: &Player,
+    winner_name: &str,
+) -> String {
+    let actions = result
+        .frames
+        .iter()
+        .map(|frame| {
+            let attacker_name = if frame.attacker_id == left.user_id {
+                &left.display_name
+            } else {
+                &right.display_name
+            };
+            format!(
+                "R{} {}施展{}，造成{}{}伤害（{} / {}）",
+                frame.round,
+                attacker_name,
+                frame.skill,
+                if frame.critical { "暴击 " } else { "" },
+                frame.damage,
+                frame.left_hp,
+                frame.right_hp
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "决斗结束：{winner_name} 获胜，共 {} 回合。\n{actions}",
+        result.rounds
+    )
+}

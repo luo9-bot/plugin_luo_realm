@@ -62,6 +62,22 @@ pub fn record_duel(
                 .map_err(DatabaseError::from_sqlite)?;
             Ok(())
         })?;
+    result
+        .frames
+        .iter()
+        .enumerate()
+        .try_for_each(|(index, frame)| {
+            let frame_json = serde_json::to_string(frame)
+                .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+            transaction
+                .execute(
+                    "INSERT INTO combat_rounds(combat_id, round_index, frame_json)
+                     VALUES(?1, ?2, ?3)",
+                    params![combat_id, index as i64 + 1, frame_json],
+                )
+                .map_err(DatabaseError::from_sqlite)?;
+            Ok(())
+        })?;
     let loser_id = if winner_id == left.user_id {
         right.user_id
     } else {

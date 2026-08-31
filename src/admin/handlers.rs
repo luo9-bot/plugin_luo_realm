@@ -224,7 +224,8 @@ fn update_profile(body: &[u8], state: &AdminState, player_id: &str) -> HttpRespo
         Ok(request) => request,
         Err(response) => return response,
     };
-    if !(1..=40).contains(&request.display_name.chars().count())
+    if !(1..=20).contains(&request.display_name.trim().chars().count())
+        || request.display_name.chars().any(char::is_control)
         || !matches!(request.status.as_str(), "active" | "disabled" | "deleted")
         || !valid_reason(&request.reason)
     {

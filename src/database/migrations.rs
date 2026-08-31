@@ -7,6 +7,7 @@ use super::error::{DatabaseError, DatabaseResult};
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../../migrations/0001_initial.sql")),
     (2, include_str!("../../migrations/0002_admin.sql")),
+    (3, include_str!("../../migrations/0003_registration.sql")),
 ];
 
 pub fn apply(connection: &mut Connection) -> DatabaseResult<()> {
