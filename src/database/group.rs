@@ -92,6 +92,7 @@ pub fn ranking(connection: &Connection, limit: usize) -> DatabaseResult<Vec<Stri
              JOIN player_cultivation cultivation USING(player_id)
              LEFT JOIN player_statistics wins
                     ON wins.player_id=player.player_id AND wins.metric_code='wins'
+             WHERE player.status='active' AND player.registration_state='active'
              ORDER BY COALESCE(wins.metric_value, 0) DESC, cultivation.realm_index DESC
              LIMIT ?1",
         )

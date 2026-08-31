@@ -43,6 +43,7 @@ pub fn combined_modifier(system_id: &str, context: &CultivationContext) -> Attri
 pub struct CombatProfile {
     pub player: Player,
     pub power: f64,
+    pub skills: &'static [&'static str],
 }
 
 pub fn build_combat_profile(
@@ -56,7 +57,11 @@ pub fn build_combat_profile(
         level: player.level,
         destiny_power: 0.0,
     };
-    let modifier = combined_modifier(system_id, &context);
+    let system = find_system(system_id);
+    let modifier = system
+        .as_ref()
+        .map(|system| system.attribute_modifier(&context))
+        .unwrap_or_default();
     let realm_multiplier = 1.0 + realm_index as f64 * 0.08;
     let destiny_multiplier = destiny::destiny_multiplier(destiny::destiny_seed(
         date,
@@ -86,6 +91,7 @@ pub fn build_combat_profile(
     CombatProfile {
         player: combatant,
         power,
+        skills: system.map(|system| system.skills()).unwrap_or_default(),
     }
 }
 

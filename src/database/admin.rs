@@ -8,6 +8,8 @@ const PAGE_LIMIT_MAX: usize = 100;
 #[derive(Debug, Serialize)]
 pub struct Overview {
     pub players: i64,
+    pub pending_players: i64,
+    pub active_players: i64,
     pub enabled_groups: i64,
     pub combats: i64,
     pub wallet_transactions: i64,
@@ -36,9 +38,10 @@ pub struct PlayerRow {
     pub player_id: i64,
     pub display_name: String,
     pub status: String,
-    pub system_id: String,
-    pub realm_index: i64,
-    pub progress: i64,
+    pub registration_state: String,
+    pub system_id: Option<String>,
+    pub realm_index: Option<i64>,
+    pub progress: Option<i64>,
     pub coins: i64,
     pub marks: i64,
     pub updated_at: i64,
@@ -96,6 +99,8 @@ pub fn overview(connection: &Connection) -> DatabaseResult<Overview> {
         .query_row(
             "SELECT
                 (SELECT COUNT(*) FROM players),
+                (SELECT COUNT(*) FROM players WHERE registration_state='pending_system'),
+                (SELECT COUNT(*) FROM players WHERE registration_state='active'),
                 (SELECT COUNT(*) FROM groups WHERE enabled=1),
                 (SELECT COUNT(*) FROM combat_records),
                 (SELECT COUNT(*) FROM wallet_transactions)",
@@ -103,9 +108,11 @@ pub fn overview(connection: &Connection) -> DatabaseResult<Overview> {
             |row| {
                 Ok(Overview {
                     players: row.get(0)?,
-                    enabled_groups: row.get(1)?,
-                    combats: row.get(2)?,
-                    wallet_transactions: row.get(3)?,
+                    pending_players: row.get(1)?,
+                    active_players: row.get(2)?,
+                    enabled_groups: row.get(3)?,
+                    combats: row.get(4)?,
+                    wallet_transactions: row.get(5)?,
                 })
             },
         )
@@ -180,12 +187,12 @@ pub fn list_players(
         .map_err(DatabaseError::from_sqlite)?;
     let mut statement = connection
         .prepare(
-            "SELECT p.player_id, profile.display_name, p.status,
+            "SELECT p.player_id, profile.display_name, p.status, p.registration_state,
                     cultivation.system_id, cultivation.realm_index, cultivation.progress,
                     COALESCE(coins.amount, 0), COALESCE(marks.amount, 0), p.updated_at
              FROM players p
              JOIN player_profiles profile USING(player_id)
-             JOIN player_cultivation cultivation USING(player_id)
+             LEFT JOIN player_cultivation cultivation USING(player_id)
              LEFT JOIN player_balances coins
                     ON coins.player_id=p.player_id AND coins.currency_code='coins'
              LEFT JOIN player_balances marks
@@ -210,12 +217,12 @@ pub fn player_detail(connection: &Connection, user_id: u64) -> DatabaseResult<Pl
     let id = player_id(user_id)?;
     let player = connection
         .query_row(
-            "SELECT p.player_id, profile.display_name, p.status,
+            "SELECT p.player_id, profile.display_name, p.status, p.registration_state,
                     cultivation.system_id, cultivation.realm_index, cultivation.progress,
                     COALESCE(coins.amount, 0), COALESCE(marks.amount, 0), p.updated_at
              FROM players p
              JOIN player_profiles profile USING(player_id)
-             JOIN player_cultivation cultivation USING(player_id)
+             LEFT JOIN player_cultivation cultivation USING(player_id)
              LEFT JOIN player_balances coins
                     ON coins.player_id=p.player_id AND coins.currency_code='coins'
              LEFT JOIN player_balances marks
@@ -364,6 +371,7 @@ pub fn adjust_wallet(
             "invalid wallet adjustment".into(),
         ));
     }
+    ensure_active_player(transaction, user_id)?;
     let before = wallet::balance(transaction, user_id, currency)?;
     let entry = if delta > 0 {
         wallet::credit(
@@ -422,20 +430,41 @@ pub fn update_cultivation(
         ));
     }
     let id = player_id(user_id)?;
-    let before: (String, i64, i64) = transaction
+    let before: Option<(String, i64, i64)> = transaction
         .query_row(
             "SELECT system_id, realm_index, progress FROM player_cultivation WHERE player_id=?1",
             [id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
+        .map_err(DatabaseError::from_sqlite)?;
+    let registration_state: String = transaction
+        .query_row(
+            "SELECT registration_state FROM players WHERE player_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()
         .map_err(DatabaseError::from_sqlite)?
         .ok_or(DatabaseError::NotFound)?;
     transaction
         .execute(
-            "UPDATE player_cultivation SET system_id=?2, realm_index=?3, progress=?4,
-                    updated_at=?5 WHERE player_id=?1",
+            "INSERT INTO player_cultivation(
+                 player_id, system_id, realm_index, progress, updated_at
+             ) VALUES(?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(player_id) DO UPDATE SET
+                 system_id=excluded.system_id,
+                 realm_index=excluded.realm_index,
+                 progress=excluded.progress,
+                 updated_at=excluded.updated_at",
             params![id, system_id, realm_index, progress, unix_timestamp()],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    transaction
+        .execute(
+            "UPDATE players SET registration_state='active', revision=revision+1, updated_at=?2
+             WHERE player_id=?1",
+            params![id, unix_timestamp()],
         )
         .map_err(DatabaseError::from_sqlite)?;
     audit_success(
@@ -447,10 +476,11 @@ pub fn update_cultivation(
             target_id: &user_id.to_string(),
             reason,
             before: Some(serde_json::json!({
-                "system_id": before.0, "realm_index": before.1, "progress": before.2
+                "cultivation": before, "registration_state": registration_state
             })),
             after: Some(serde_json::json!({
-                "system_id": system_id, "realm_index": realm_index, "progress": progress
+                "system_id": system_id, "realm_index": realm_index, "progress": progress,
+                "registration_state": "active"
             })),
         },
     )
@@ -466,6 +496,7 @@ pub fn grant_item(
     quality: &str,
     reason: &str,
 ) -> DatabaseResult<i64> {
+    ensure_active_player(transaction, user_id)?;
     let id = player_id(user_id)?;
     let slot: i64 = transaction
         .query_row(
@@ -515,6 +546,7 @@ pub fn remove_item(
     item_id: i64,
     reason: &str,
 ) -> DatabaseResult<()> {
+    ensure_active_player(transaction, user_id)?;
     let before: (String, i64) = transaction
         .query_row(
             "SELECT definition_id, quantity FROM item_instances
@@ -555,6 +587,7 @@ pub fn update_statistic(
     value: i64,
     reason: &str,
 ) -> DatabaseResult<()> {
+    ensure_active_player(transaction, user_id)?;
     let id = player_id(user_id)?;
     let before: Option<i64> = transaction
         .query_row(
@@ -656,17 +689,37 @@ fn pagination(page: usize, limit: usize) -> (usize, usize, i64) {
     (page, limit, offset)
 }
 
+fn ensure_active_player(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult<()> {
+    let active: bool = transaction
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM players
+                 WHERE player_id=?1 AND status='active' AND registration_state='active'
+             )",
+            [player_id(user_id)?],
+            |row| row.get(0),
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    if !active {
+        return Err(DatabaseError::InvalidData(
+            "player has not completed registration".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn player_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlayerRow> {
     Ok(PlayerRow {
         player_id: row.get(0)?,
         display_name: row.get(1)?,
         status: row.get(2)?,
-        system_id: row.get(3)?,
-        realm_index: row.get(4)?,
-        progress: row.get(5)?,
-        coins: row.get(6)?,
-        marks: row.get(7)?,
-        updated_at: row.get(8)?,
+        registration_state: row.get(3)?,
+        system_id: row.get(4)?,
+        realm_index: row.get(5)?,
+        progress: row.get(6)?,
+        coins: row.get(7)?,
+        marks: row.get(8)?,
+        updated_at: row.get(9)?,
     })
 }
 
