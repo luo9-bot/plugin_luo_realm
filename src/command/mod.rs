@@ -173,20 +173,31 @@ fn dispatch(
             arguments,
             &config.gameplay,
         ),
-        Command::AsciiFpv => ascii_fpv(root, user_id, &config.game),
+        Command::AsciiFpv => ascii_fpv(database, root, user_id, &config.game),
         Command::Redeem => redeem(database, user_id, arguments, &config.game),
     }
 }
 
-fn ascii_fpv(root: &Path, user_id: u64, config: &GameConfig) -> Result<String, DatabaseError> {
+fn ascii_fpv(
+    database: &mut Database,
+    root: &Path,
+    user_id: u64,
+    config: &GameConfig,
+) -> Result<String, DatabaseError> {
     if config.reward_public_key.trim().is_empty() {
         return Ok("御空试炼尚未完成兑换公钥配置，请联系管理员。".into());
     }
-    match crate::game::issue_ascii_fpv_url(root, user_id, config) {
+    match crate::game::issue_ascii_fpv_url(database, root, user_id, config) {
         Ok(url) => Ok(format!(
-            "御空试炼已开启：\n{url}\n游戏可无限重开；兑换次数按每日额度计算，网址 2 小时内有效。"
+            "御空试炼已开启：\n{url}\n游戏可无限重开；兑换次数按每日额度计算，网址 2 小时内有效，兑换码 24 小时内有效。"
         )),
         Err(crate::game::GameError::NotConfigured) => Ok("御空试炼当前未开启。".into()),
+        Err(crate::game::GameError::Activation(_)) => {
+            Ok("云端试炼会话激活失败，请稍后重试。".into())
+        }
+        Err(crate::game::GameError::RateLimited) => {
+            Ok("御空试炼链接生成过于频繁，请 15 秒后再试。".into())
+        }
         Err(error) => Err(DatabaseError::InvalidData(error.to_string())),
     }
 }

@@ -5,7 +5,7 @@ pub use session::issue_ascii_fpv_url;
 pub use voucher::{VerifiedVoucher, verify_reward_voucher};
 
 pub const ASCII_FPV_GAME_ID: &str = "ascii-fpv";
-pub const MIN_REWARD_COINS: i64 = 20;
+pub const MIN_REWARD_COINS: i64 = 1;
 pub const MAX_REWARD_COINS: i64 = 60;
 
 #[derive(Debug, thiserror::Error)]
@@ -18,6 +18,10 @@ pub enum GameError {
     Random(String),
     #[error("game session key is invalid")]
     InvalidSessionKey,
+    #[error("cloud game session activation failed: {0}")]
+    Activation(String),
+    #[error("game session creation is rate limited")]
+    RateLimited,
     #[error("reward voucher is invalid")]
     InvalidVoucher,
     #[error("reward voucher has expired")]

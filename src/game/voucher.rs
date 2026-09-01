@@ -94,7 +94,7 @@ fn validate_payload(
         || payload.game_id != ASCII_FPV_GAME_ID
         || payload.score > 100_000
         || !(MIN_REWARD_COINS..=MAX_REWARD_COINS).contains(&payload.reward)
-        || payload.nonce.len() != 16
+        || payload.nonce.len() != 32
         || !payload
             .nonce
             .bytes()

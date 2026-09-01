@@ -11,7 +11,12 @@ pub mod identity;
 mod paths;
 mod render;
 
-use std::{path::Path, thread, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
+    thread,
+    time::Duration,
+};
 
 use config::{CommandConfig, RuntimeConfig, RuntimePolicy};
 use database::{Database, DatabaseError};
@@ -25,6 +30,17 @@ use luo9_sdk::{
 pub enum IncomingContext {
     Group { group_id: u64 },
     Private,
+}
+
+const MESSAGE_WORKER_COUNT: usize = 4;
+const MESSAGE_QUEUE_CAPACITY: usize = 256;
+
+struct MessageWork {
+    context: IncomingContext,
+    group_id: u64,
+    user_id: u64,
+    message: String,
+    is_group: bool,
 }
 
 pub fn route_message(
@@ -112,7 +128,7 @@ pub extern "C" fn plugin_main() {
         }
     };
     let policy = RuntimePolicy::new(config);
-    let mut database = match Database::open(&database_path) {
+    let database = match Database::open(&database_path) {
         Ok(database) => database,
         Err(error) => {
             eprintln!("[Luo Realm] database startup failed: {error}");
@@ -120,8 +136,16 @@ pub extern "C" fn plugin_main() {
         }
     };
     if policy.snapshot().admin.enabled {
-        let _admin_thread = admin::start(root.clone(), database_path, policy.clone());
+        let _admin_thread = admin::start(root.clone(), database_path.clone(), policy.clone());
     }
+    let workers = match start_message_workers(&root, &database_path, &policy) {
+        Ok(workers) => workers,
+        Err(error) => {
+            eprintln!("[Luo Realm] message workers failed to start: {error}");
+            return;
+        }
+    };
+    drop(database);
     let topic = Bus::topic("luo9_message");
     let Ok(subscriber) = topic.subscribe() else {
         return;
@@ -137,26 +161,87 @@ pub extern "C" fn plugin_main() {
             } else {
                 IncomingContext::Private
             };
-            match route_message(
-                &mut database,
-                &root,
-                &policy,
+            let work = MessageWork {
                 context,
-                message.user_id,
-                &message.message,
-            ) {
-                Ok(Some(reply)) if message.message_type == MsgType::Group => {
-                    let _ = send::send_group_msg(group_id, &reply);
-                }
-                Ok(Some(reply)) => {
-                    let _ = send::send_private_msg(message.user_id, &reply);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    eprintln!("[Luo Realm] command failed: {error}");
+                group_id,
+                user_id: message.user_id,
+                message: message.message,
+                is_group: message.message_type == MsgType::Group,
+            };
+            let worker_index = (work.user_id % workers.len() as u64) as usize;
+            match workers[worker_index].try_send(work) {
+                Ok(()) => {}
+                Err(TrySendError::Full(work)) => reply_worker_busy(&work),
+                Err(TrySendError::Disconnected(_)) => {
+                    eprintln!("[Luo Realm] message worker is unavailable");
                 }
             }
         }
         thread::sleep(Duration::from_millis(2));
     }
+}
+
+fn reply_worker_busy(work: &MessageWork) {
+    const MESSAGE: &str = "当前命令队列繁忙，请稍后重试。";
+
+    if work.is_group {
+        let _ = send::send_group_msg(work.group_id, MESSAGE);
+    } else {
+        let _ = send::send_private_msg(work.user_id, MESSAGE);
+    }
+}
+
+fn start_message_workers(
+    root: &Path,
+    database_path: &Path,
+    policy: &RuntimePolicy,
+) -> std::io::Result<Vec<SyncSender<MessageWork>>> {
+    (0..MESSAGE_WORKER_COUNT)
+        .map(|worker_index| {
+            let (sender, receiver) = sync_channel(MESSAGE_QUEUE_CAPACITY);
+            let worker_root = root.to_path_buf();
+            let worker_database_path = database_path.to_path_buf();
+            let worker_policy = policy.clone();
+            thread::Builder::new()
+                .name(format!("luo-realm-message-{worker_index}"))
+                .spawn(move || {
+                    run_message_worker(receiver, worker_root, worker_database_path, worker_policy);
+                })
+                .map(|_| sender)
+        })
+        .collect()
+}
+
+fn run_message_worker(
+    receiver: Receiver<MessageWork>,
+    root: PathBuf,
+    database_path: PathBuf,
+    policy: RuntimePolicy,
+) {
+    let mut database = match Database::open_request(&database_path) {
+        Ok(database) => database,
+        Err(error) => {
+            eprintln!("[Luo Realm] message worker database failed: {error}");
+            return;
+        }
+    };
+    receiver.iter().for_each(|work| {
+        match route_message(
+            &mut database,
+            &root,
+            &policy,
+            work.context,
+            work.user_id,
+            &work.message,
+        ) {
+            Ok(Some(reply)) if work.is_group => {
+                let _ = send::send_group_msg(work.group_id, &reply);
+            }
+            Ok(Some(reply)) => {
+                let _ = send::send_private_msg(work.user_id, &reply);
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("[Luo Realm] command failed: {error}"),
+        }
+    });
 }
