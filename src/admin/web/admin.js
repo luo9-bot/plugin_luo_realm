@@ -569,8 +569,26 @@ async function loadSettings() {
     }));
 }
 
+function normalizeRewardPublicKey(value) {
+    const assignment = value
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .find(line => /^reward_public_key\s*=/i.test(line));
+    const key = assignment ? assignment.replace(/^reward_public_key\s*=\s*/i, '') : value.trim();
+    return key.replace(/^(["'])|(["'])$/g, '').trim();
+}
+
 async function saveSettings(event) {
     event.preventDefault();
+    const rewardPublicKeyField = byId('rewardPublicKey');
+    const rewardPublicKey = normalizeRewardPublicKey(rewardPublicKeyField.value);
+    if (rewardPublicKey && !/^[A-Za-z0-9_-]{43}$/.test(rewardPublicKey)) {
+        rewardPublicKeyField.setCustomValidity('请输入 generate-keys 输出中 reward_public_key= 后的 43 个字符，或直接粘贴完整输出。');
+        rewardPublicKeyField.reportValidity();
+        return;
+    }
+    rewardPublicKeyField.value = rewardPublicKey;
+    rewardPublicKeyField.setCustomValidity('');
     const action = await requestAction({ title: '保存运行设置', confirmation: 'config:update' });
     if (!action) return;
     const adminIds = byId('adminIds').value.split(/\s+/).filter(Boolean).map(Number).filter(Number.isSafeInteger);
@@ -580,7 +598,7 @@ async function saveSettings(event) {
         game: {
             ascii_fpv_enabled: byId('asciiFpvEnabled').value === 'true',
             ascii_fpv_domain: byId('asciiFpvDomain').value.trim(),
-            reward_public_key: byId('rewardPublicKey').value.trim(),
+            reward_public_key: rewardPublicKey,
             daily_redemption_limit: Number(byId('dailyRedemptionLimit').value),
         },
         admin: { enabled: state.config.admin.enabled, bind: byId('bind').value, port: Number(byId('port').value), admin_ids: adminIds },
@@ -679,6 +697,7 @@ byId('dataExportButton').addEventListener('click', exportData);
 byId('dataImportInput').addEventListener('change', event => { const file = event.target.files[0]; if (file) importData(file); event.target.value = ''; });
 byId('backupButton').addEventListener('click', createBackup);
 byId('configForm').addEventListener('submit', saveSettings);
+byId('rewardPublicKey').addEventListener('input', event => event.currentTarget.setCustomValidity(''));
 byId('generateToken').addEventListener('click', generateToken);
 byId('rotateToken').addEventListener('click', rotateToken);
 byId('auditRefreshButton').addEventListener('click', loadAudit);
