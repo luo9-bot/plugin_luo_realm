@@ -27,6 +27,7 @@ getrandom = "0.3"
 base64 = "0.22"
 ureq = { version = "3.3", features = ["json"] }
 zip = { version = "4", default-features = false, features = ["deflate"] }
+bevy_ecs = "0.16"
 
 [dev-dependencies]
 tempfile = "3"

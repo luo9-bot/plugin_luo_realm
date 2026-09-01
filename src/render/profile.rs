@@ -23,7 +23,10 @@ pub fn render(root: &Path, data: &ProfileRenderData<'_>, path: &Path) -> io::Res
     );
     fill(&mut image, 38, 82, 364, 424, Rgba([225, 224, 216, 255]));
 
-    if let Some(portrait) = assets.portrait(&data.player.user_id) {
+    if let Some(portrait) = assets
+        .portrait_by_id(&data.player.avatar_id)
+        .or_else(|| assets.portrait(&data.player.user_id))
+    {
         let portrait = portrait.resize_exact(340, 408, imageops::FilterType::Lanczos3);
         imageops::overlay(&mut image, &portrait, 50, 90);
     } else {

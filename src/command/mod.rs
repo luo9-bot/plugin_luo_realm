@@ -5,8 +5,9 @@ use std::path::Path;
 use rusqlite::Transaction;
 
 use crate::{
+    combat,
     config::{CommandConfig, GameConfig, GameplayConfig, RuntimeConfig},
-    core::{Combatant, Player, simulate_combat, stable_seed},
+    core::{Player, stable_seed},
     database::{self, Database, DatabaseError},
     engine, identity, render,
 };
@@ -39,6 +40,10 @@ enum Command {
     Duel,
     AsciiFpv,
     Redeem,
+    Skills,
+    Tactic,
+    Equipment,
+    Cultivate,
 }
 
 impl Command {
@@ -59,6 +64,10 @@ impl Command {
             "决斗" | "duel" => Some(Self::Duel),
             "御空试炼" | "飞行试炼" | "fpv" => Some(Self::AsciiFpv),
             "兑换" | "redeem" => Some(Self::Redeem),
+            "技能" | "skills" => Some(Self::Skills),
+            "战术" | "tactic" => Some(Self::Tactic),
+            "装备" | "equipment" => Some(Self::Equipment),
+            "修行行动" | "cultivate" => Some(Self::Cultivate),
             _ => None,
         }
     }
@@ -151,7 +160,7 @@ fn dispatch(
 ) -> Result<String, DatabaseError> {
     match command {
         Command::Menu => Ok(format!(
-            "{}：注册 / 体系 / 选择体系 / 签到 / 状态 / 今日状态 / 战力 / 每日事件 / 世界事件 / 决斗 / 御空试炼 / 兑换 / 排行 / 改名",
+            "{}：注册 / 体系 / 选择体系 / 签到 / 修行行动 / 技能 / 战术 / 装备 / 状态 / 今日状态 / 战力 / 每日事件 / 世界事件 / 决斗 / 御空试炼 / 兑换 / 排行 / 改名",
             identity::PRODUCT_NAME
         )),
         Command::Systems => Ok(format!("可选修行体系：{}", registration::system_catalog())),
@@ -175,6 +184,10 @@ fn dispatch(
         ),
         Command::AsciiFpv => ascii_fpv(database, root, user_id, &config.game),
         Command::Redeem => redeem(database, user_id, arguments, &config.game),
+        Command::Skills => skills(database, user_id, arguments),
+        Command::Tactic => tactic(database, user_id, arguments),
+        Command::Equipment => equipment(database, user_id, arguments),
+        Command::Cultivate => cultivate(database, user_id, arguments),
     }
 }
 
@@ -257,6 +270,150 @@ fn active_player(transaction: &Transaction<'_>, user_id: u64) -> Result<Player, 
     database::player::get_active(transaction, user_id)?.ok_or_else(|| {
         DatabaseError::InvalidData("active player is missing cultivation data".into())
     })
+}
+
+fn skills(
+    database: &mut Database,
+    user_id: u64,
+    arguments: &[&str],
+) -> Result<String, DatabaseError> {
+    let transaction = database.immediate_transaction()?;
+    let skills = database::skills::list(&transaction, user_id)?;
+    if let Some(skill_id) = arguments.first()
+        && arguments.get(1).is_some_and(|action| *action == "研习")
+    {
+        let mastery = database::skills::train(&transaction, user_id, skill_id)?;
+        transaction.commit().map_err(DatabaseError::from_sqlite)?;
+        return Ok(format!("技能 {skill_id} 熟练度提升至 {mastery}/3。"));
+    }
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    Ok(skills
+        .into_iter()
+        .map(|skill| {
+            format!(
+                "{} {}（熟练度 {}/3）",
+                skill.definition.id, skill.definition.name, skill.mastery
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+fn tactic(
+    database: &mut Database,
+    user_id: u64,
+    arguments: &[&str],
+) -> Result<String, DatabaseError> {
+    let Some(code) = arguments.first() else {
+        return Ok("战术可选：balanced / aggressive / defensive / sustain / control".into());
+    };
+    let tactic = combat::Tactic::from_code(code)
+        .ok_or_else(|| DatabaseError::InvalidData("未知战术方案".into()))?;
+    let transaction = database.immediate_transaction()?;
+    database::skills::set_tactic(&transaction, user_id, tactic)?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    Ok(format!("自动战术已切换为：{}。", tactic.name()))
+}
+
+fn equipment(
+    database: &mut Database,
+    user_id: u64,
+    arguments: &[&str],
+) -> Result<String, DatabaseError> {
+    let transaction = database.immediate_transaction()?;
+    if arguments.first().is_some_and(|action| *action == "穿戴") {
+        let item_id = arguments
+            .get(1)
+            .and_then(|value| value.parse::<i64>().ok())
+            .ok_or_else(|| DatabaseError::InvalidData("请指定物品编号".into()))?;
+        let slot = arguments
+            .get(2)
+            .and_then(|value| combat::EquipmentSlot::from_code(value))
+            .ok_or_else(|| DatabaseError::InvalidData("请指定装备槽标识".into()))?;
+        database::inventory::equip(&transaction, user_id, item_id, slot)?;
+        transaction.commit().map_err(DatabaseError::from_sqlite)?;
+        return Ok(format!("装备 {} 已穿戴至 {}。", item_id, slot.code()));
+    }
+    if arguments.first().is_some_and(|action| *action == "卸下") {
+        let slot = arguments
+            .get(1)
+            .and_then(|value| combat::EquipmentSlot::from_code(value))
+            .ok_or_else(|| DatabaseError::InvalidData("请指定装备槽标识".into()))?;
+        let changed = database::inventory::unequip(&transaction, user_id, slot)?;
+        transaction.commit().map_err(DatabaseError::from_sqlite)?;
+        return Ok(if changed {
+            format!("已卸下 {}。", slot.code())
+        } else {
+            "该装备槽为空。".into()
+        });
+    }
+    let items = database::inventory::list(&transaction, user_id)?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    Ok(items
+        .into_iter()
+        .map(|item| {
+            format!(
+                "#{} {} x{} {}",
+                item.item_id,
+                item.definition_id,
+                item.quantity,
+                item.equipped_slot.unwrap_or_else(|| "未装备".into())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+fn cultivate(
+    database: &mut Database,
+    user_id: u64,
+    arguments: &[&str],
+) -> Result<String, DatabaseError> {
+    let action = arguments.first().copied().unwrap_or("吐纳");
+    let allowed = ["吐纳", "闭关", "研习", "历练", "淬炼", "休养"];
+    if !allowed.contains(&action) {
+        return Ok("修行行动：吐纳 / 闭关 / 研习 / 历练 / 淬炼 / 休养".into());
+    }
+    let date = database.local_date()?;
+    let transaction = database.immediate_transaction()?;
+    let changed = transaction.execute(
+        "INSERT INTO player_cultivation_actions(player_id, action_date, action_code, result_json, created_at)
+         VALUES(?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![database::player_id(user_id)?, date, action, "{}", database::unix_timestamp()],
+    );
+    if let Err(error) = changed {
+        if matches!(error, rusqlite::Error::SqliteFailure(_, _)) {
+            return Ok("今天已经完成主要修行动作。".into());
+        }
+        return Err(DatabaseError::from_sqlite(error));
+    }
+    let progress = match action {
+        "吐纳" | "闭关" => 35,
+        "研习" => 18,
+        "历练" => 25,
+        "淬炼" => 12,
+        "休养" => 5,
+        _ => 0,
+    };
+    transaction
+        .execute(
+            "UPDATE player_cultivation SET progress=progress+?2, mastery=mastery+?3,
+         fatigue=CASE WHEN ?4='休养' THEN MAX(0, fatigue-200) ELSE MIN(10000, fatigue+100) END,
+         injury=CASE WHEN ?4='休养' THEN MAX(0, injury-250) ELSE injury END,
+         updated_at=?5 WHERE player_id=?1",
+            rusqlite::params![
+                database::player_id(user_id)?,
+                progress,
+                if action == "研习" { 8 } else { 2 },
+                action,
+                database::unix_timestamp()
+            ],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    Ok(format!(
+        "今日修行完成：{action}，获得修为进度 +{progress}。"
+    ))
 }
 
 fn power(database: &mut Database, user_id: u64) -> Result<String, DatabaseError> {
@@ -504,12 +661,6 @@ fn duel(
     let right_cultivation = database::cultivation::get(&transaction, target_id)?;
     let left_daily = database::daily_state::get_or_create(&transaction, user_id, &date)?;
     let right_daily = database::daily_state::get_or_create(&transaction, target_id, &date)?;
-    let left_system_name = engine::find_system(&left_cultivation.system_id)
-        .map(|system| system.name())
-        .ok_or_else(|| DatabaseError::InvalidData("unknown left cultivation system".into()))?;
-    let right_system_name = engine::find_system(&right_cultivation.system_id)
-        .map(|system| system.name())
-        .ok_or_else(|| DatabaseError::InvalidData("unknown right cultivation system".into()))?;
     if group_id != 0 {
         database::group::ensure(&transaction, group_id)?;
     }
@@ -519,51 +670,57 @@ fn duel(
         &format!("{group_id}:{user_id}:{target_id}"),
         identity::VERSION_SALT,
     );
-    let left_profile = engine::build_combat_profile_with_state(
-        &left,
-        &left_cultivation.system_id,
-        left_cultivation.realm_index,
-        &date,
-        Some(&left_daily),
-    );
-    let right_profile = engine::build_combat_profile_with_state(
-        &right,
-        &right_cultivation.system_id,
-        right_cultivation.realm_index,
-        &date,
-        Some(&right_daily),
-    );
-    let result = simulate_combat(
-        Combatant {
-            player: &left_profile.player,
-            skills: left_profile.skills,
-        },
-        Combatant {
-            player: &right_profile.player,
-            skills: right_profile.skills,
-        },
-        seed,
-        30,
-    );
-    database::combat::record_duel(
+    let left_equipment = database::inventory::equipped(&transaction, user_id)?;
+    let right_equipment = database::inventory::equipped(&transaction, target_id)?;
+    let left_loadout = database::skills::loadout(
         &transaction,
-        group_id,
-        database::combat::DuelParticipant {
-            user_id,
-            system_id: &left_cultivation.system_id,
-            realm_index: left_cultivation.realm_index,
-            power_before: left_profile.power,
-            hp_before: left_profile.player.base_hp,
-        },
-        database::combat::DuelParticipant {
-            user_id: target_id,
-            system_id: &right_cultivation.system_id,
-            realm_index: right_cultivation.realm_index,
-            power_before: right_profile.power,
-            hp_before: right_profile.player.base_hp,
-        },
-        &result,
+        user_id,
+        &left_cultivation.system_id,
+        combat::universal_tier(
+            left_cultivation.realm_index,
+            engine::find_system(&left_cultivation.system_id)
+                .map(|system| system.realms().len())
+                .unwrap_or(1),
+        ),
     )?;
+    let right_loadout = database::skills::loadout(
+        &transaction,
+        target_id,
+        &right_cultivation.system_id,
+        combat::universal_tier(
+            right_cultivation.realm_index,
+            engine::find_system(&right_cultivation.system_id)
+                .map(|system| system.realms().len())
+                .unwrap_or(1),
+        ),
+    )?;
+    let snapshot = engine::build_combat_snapshot(
+        (&left, &left_cultivation, Some(&left_daily), left_equipment),
+        (
+            &right,
+            &right_cultivation,
+            Some(&right_daily),
+            right_equipment,
+        ),
+        &date,
+        seed,
+    );
+    let mut snapshot = snapshot;
+    if let Some(left_snapshot) = snapshot.combatants.get_mut(0) {
+        left_snapshot.active_skills = left_loadout.active;
+        left_snapshot.passive_skills = left_loadout.passive;
+        left_snapshot.domain_skill = left_loadout.domain;
+        left_snapshot.tactic = left_loadout.tactic;
+    }
+    if let Some(right_snapshot) = snapshot.combatants.get_mut(1) {
+        right_snapshot.active_skills = right_loadout.active;
+        right_snapshot.passive_skills = right_loadout.passive;
+        right_snapshot.domain_skill = right_loadout.domain;
+        right_snapshot.tactic = right_loadout.tactic;
+    }
+    let result = combat::run_battle(&snapshot)
+        .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+    database::combat::record_battle(&transaction, group_id, &snapshot, &result)?;
     let event_completed = database::world_event::contribute_many(
         &transaction,
         group_id,
@@ -579,39 +736,38 @@ fn duel(
     )?;
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
 
+    let winner_name = snapshot
+        .combatants
+        .iter()
+        .find(|combatant| combatant.team == result.winner_team)
+        .map(|combatant| combatant.display_name.as_str())
+        .unwrap_or("未知队伍");
+    let concise = format!(
+        "决斗结束：{winner_name} 获胜，持续 {} 个时间片，产生 {} 个战斗事件。",
+        result.elapsed_ticks,
+        result.events.len()
+    );
+    let completion = world_completion_message(event_completed);
     let image = root
         .join(identity::DATA_DIRECTORY)
         .join("battles")
         .join(format!("{group_id}-{user_id}-{target_id}.gif"));
-    let winner_name = if result.winner_id == left_profile.player.user_id {
-        &left_profile.player.display_name
+    let rendered = render::battle(root, &snapshot, &result, &image).is_ok();
+    let report_suffix = if show_report {
+        format!("\n关键事件数：{}", result.events.len())
     } else {
-        &right_profile.player.display_name
+        String::new()
     };
-    let report = battle_report(
-        &result,
-        &left_profile.player,
-        &right_profile.player,
-        winner_name,
-    );
-    let render_data = render::BattleRenderData {
-        left: &left_profile,
-        right: &right_profile,
-        left_system: left_system_name,
-        right_system: right_system_name,
-        result: &result,
-    };
-    let concise = format!("决斗结束：{winner_name} 获胜，共 {} 回合。", result.rounds);
-    let completion = world_completion_message(event_completed);
-    Ok(match render::battle(root, &render_data, &image) {
-        Ok(()) if show_report => {
-            format!("{report}\n[CQ:image,file={}]", image.display()) + completion
-        }
-        Ok(()) => format!("[CQ:image,file={}]", image.display()) + completion,
-        Err(error) => {
-            eprintln!("[Luo Realm] battle rendering failed: {error}");
-            (if show_report { report } else { concise }) + completion
-        }
+    Ok(if rendered {
+        format!(
+            "{}\n[CQ:image,file={}]{}{}",
+            concise,
+            image.display(),
+            completion,
+            report_suffix
+        )
+    } else {
+        concise + completion + &report_suffix
     })
 }
 
@@ -621,38 +777,4 @@ fn world_completion_message(completed: bool) -> &'static str {
     } else {
         ""
     }
-}
-
-fn battle_report(
-    result: &crate::core::CombatResult,
-    left: &Player,
-    right: &Player,
-    winner_name: &str,
-) -> String {
-    let actions = result
-        .frames
-        .iter()
-        .map(|frame| {
-            let attacker_name = if frame.attacker_id == left.user_id {
-                &left.display_name
-            } else {
-                &right.display_name
-            };
-            format!(
-                "R{} {}施展{}，造成{}{}伤害（{} / {}）",
-                frame.round,
-                attacker_name,
-                frame.skill,
-                if frame.critical { "暴击 " } else { "" },
-                frame.damage,
-                frame.left_hp,
-                frame.right_hp
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "决斗结束：{winner_name} 获胜，共 {} 回合。\n{actions}",
-        result.rounds
-    )
 }

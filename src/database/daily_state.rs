@@ -147,7 +147,7 @@ fn recent_combat(transaction: &Transaction<'_>, id: i64) -> DatabaseResult<(u32,
     transaction
         .query_row(
             "SELECT COALESCE(SUM(won), 0), COALESCE(SUM(1-won), 0) FROM (
-                 SELECT CASE WHEN record.winner_player_id=?1 THEN 1 ELSE 0 END AS won
+                 SELECT CASE WHEN participant.team=record.winner_team THEN 1 ELSE 0 END AS won
                  FROM combat_participants participant
                  JOIN combat_records record USING(combat_id)
                  WHERE participant.player_id=?1

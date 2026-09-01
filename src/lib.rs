@@ -1,10 +1,12 @@
 pub mod admin;
+pub mod combat;
 mod command;
 pub mod config;
 pub mod core;
 pub mod cultivation;
 pub mod database;
 pub mod engine;
+pub mod equipment;
 pub mod game;
 pub mod identity;
 

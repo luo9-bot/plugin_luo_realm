@@ -35,22 +35,24 @@ impl RealmAssets {
         image::open(&images[index]).ok()
     }
 
+    pub fn portrait_by_id(&self, avatar_id: &str) -> Option<DynamicImage> {
+        if avatar_id.is_empty()
+            || avatar_id.contains('/')
+            || avatar_id.contains('\\')
+            || avatar_id.contains("..")
+            || avatar_id.chars().any(char::is_control)
+        {
+            return None;
+        }
+        image::open(self.root.join("portraits").join(format!("{avatar_id}.png"))).ok()
+    }
+
     pub fn realm_badge(&self, realm_index: u32) -> Option<DynamicImage> {
         let path = self
             .root
             .join("realm_badges")
             .join(format!("{}.png", realm_index.min(9)));
         image::open(path).ok()
-    }
-
-    pub fn skill_icon(&self, skill: &str) -> Option<DynamicImage> {
-        let directory = self.root.join("skill_icons");
-        named_or_stable_image(&directory, skill)
-    }
-
-    pub fn skill_effect(&self, skill: &str) -> Option<DynamicImage> {
-        let directory = self.root.join("skill_effects");
-        named_or_stable_image(&directory, skill)
     }
 }
 
@@ -131,21 +133,6 @@ fn png_files(directory: &Path) -> Vec<PathBuf> {
         .collect::<Vec<_>>();
     files.sort_unstable();
     files
-}
-
-fn named_or_stable_image(directory: &Path, name: &str) -> Option<DynamicImage> {
-    let exact = directory.join(format!("{name}.png"));
-    if let Ok(image) = image::open(exact) {
-        return Some(image);
-    }
-
-    let images = png_files(directory);
-    if images.is_empty() {
-        return None;
-    }
-    let digest = Sha256::digest(name.as_bytes());
-    let index = u64::from_be_bytes(digest[0..8].try_into().ok()?) as usize % images.len();
-    image::open(&images[index]).ok()
 }
 
 fn recover_interrupted_replace(path: &Path, temporary: &Path, backup: &Path) -> io::Result<()> {

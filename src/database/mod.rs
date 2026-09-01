@@ -10,6 +10,7 @@ pub mod game_session;
 pub mod group;
 pub mod inventory;
 pub mod player;
+pub mod skills;
 pub mod wallet;
 pub mod world_event;
 

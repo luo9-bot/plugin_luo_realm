@@ -377,7 +377,7 @@ pub fn delete_player(
     transaction
         .execute(
             "DELETE FROM combat_records
-             WHERE winner_player_id=?1 OR combat_id IN (
+             WHERE combat_id IN (
                  SELECT combat_id FROM combat_participants WHERE player_id=?1
              )",
             [id],

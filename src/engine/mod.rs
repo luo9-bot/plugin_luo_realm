@@ -1,6 +1,8 @@
 use crate::{
+    combat::{self, CombatAttributes, CombatSnapshot, CombatantSnapshot, ResourceSnapshot},
     core::Player,
     cultivation::{AttributeModifier, CultivationContext, registered_systems},
+    equipment,
 };
 
 pub mod daily_state;
@@ -112,6 +114,101 @@ pub fn build_combat_profile_with_state(
         player: combatant,
         power,
         skills: system.map(|system| system.skills()).unwrap_or_default(),
+    }
+}
+
+pub fn build_combat_snapshot(
+    left: (
+        &Player,
+        &crate::database::cultivation::CultivationState,
+        Option<&daily_state::DailyState>,
+        Vec<equipment::EquipmentItem>,
+    ),
+    right: (
+        &Player,
+        &crate::database::cultivation::CultivationState,
+        Option<&daily_state::DailyState>,
+        Vec<equipment::EquipmentItem>,
+    ),
+    date: &str,
+    seed: u64,
+) -> CombatSnapshot {
+    let left_snapshot = build_combatant_snapshot(left, 0, 0, date);
+    let right_snapshot = build_combatant_snapshot(right, 1, 1, date);
+    CombatSnapshot {
+        rule_version: 1,
+        seed,
+        rules: combat::BattleRules::default(),
+        combatants: vec![left_snapshot, right_snapshot],
+    }
+}
+
+fn build_combatant_snapshot(
+    input: (
+        &Player,
+        &crate::database::cultivation::CultivationState,
+        Option<&daily_state::DailyState>,
+        Vec<equipment::EquipmentItem>,
+    ),
+    team: u8,
+    position: i32,
+    date: &str,
+) -> CombatantSnapshot {
+    let (player, cultivation, daily_state, equipped) = input;
+    let tier = combat::universal_tier(
+        cultivation.realm_index,
+        find_system(&cultivation.system_id)
+            .map(|system| system.realms().len())
+            .unwrap_or(1),
+    );
+    let profile = build_combat_profile_with_state(
+        player,
+        &cultivation.system_id,
+        cultivation.realm_index,
+        date,
+        daily_state,
+    );
+    let mut attributes = CombatAttributes {
+        max_health: profile.player.base_hp,
+        attack: profile.player.base_attack,
+        physical_defense: profile.player.base_defense,
+        arcane_defense: profile.player.base_defense / 2,
+        soul_defense: profile.player.base_defense / 2,
+        speed: profile.player.speed,
+        critical_rate_basis_points: (profile.player.critical_rate * 100.0).round() as i64,
+        critical_damage_basis_points: (profile.player.critical_multiplier * 10_000.0).round()
+            as i64,
+        recovery_power: profile.player.base_attack / 2,
+        control_power: profile.player.base_attack / 3,
+        tenacity: profile.player.base_defense * 10,
+        domain_power: profile.player.base_attack / 4,
+    };
+    let bonuses = equipment::compile(&equipped);
+    equipment::apply_to_attributes(&mut attributes, &bonuses);
+    let (active, passive, domain) = combat::default_loadout(&cultivation.system_id, tier);
+    CombatantSnapshot {
+        combatant_id: player.user_id.clone(),
+        player_id: player.user_id.parse().ok(),
+        display_name: player.display_name.clone(),
+        avatar_id: player.avatar_id.clone(),
+        system_id: cultivation.system_id.clone(),
+        universal_tier: tier,
+        team,
+        position,
+        attributes,
+        resource: ResourceSnapshot {
+            kind: combat::resource_kind(&cultivation.system_id)
+                .unwrap_or(combat::ResourceKind::SpiritualEnergy),
+            current: 100,
+            maximum: 100,
+            regeneration: 4,
+        },
+        active_skills: active,
+        passive_skills: passive,
+        domain_skill: domain,
+        equipment_triggers: bonuses.triggers,
+        tactic: combat::Tactic::Balanced,
+        power: profile.power.round() as i64,
     }
 }
 

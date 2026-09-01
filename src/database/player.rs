@@ -132,7 +132,7 @@ pub fn get_active(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult
     let player_id = player_id(user_id)?;
     transaction
         .query_row(
-            "SELECT p.player_id, profile.display_name, cultivation.realm_index,
+            "SELECT p.player_id, profile.display_name, profile.avatar_id, cultivation.realm_index,
                     COALESCE(coins.amount, 0), COALESCE(marks.amount, 0),
                     COALESCE(wins.metric_value, 0), COALESCE(losses.metric_value, 0)
              FROM players p
@@ -150,22 +150,23 @@ pub fn get_active(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult
             [player_id],
             |row| {
                 let id: i64 = row.get(0)?;
-                let realm_index: u32 = row.get(2)?;
+                let realm_index: u32 = row.get(3)?;
                 Ok(Player {
                     user_id: id.to_string(),
                     display_name: row.get(1)?,
+                    avatar_id: row.get(2)?,
                     level: realm_index + 1,
                     experience: 0,
-                    coins: row.get::<_, i64>(3)?.max(0) as u64,
-                    marks: row.get::<_, i64>(4)?.max(0) as u64,
+                    coins: row.get::<_, i64>(4)?.max(0) as u64,
+                    marks: row.get::<_, i64>(5)?.max(0) as u64,
                     base_hp: 1000 + i64::from(realm_index) * 200,
                     base_attack: 100 + i64::from(realm_index) * 30,
                     base_defense: 50 + i64::from(realm_index) * 15,
                     critical_rate: 5.0,
                     critical_multiplier: 1.5,
                     speed: 10 + i64::from(realm_index),
-                    wins: row.get::<_, i64>(5)?.max(0) as u64,
-                    losses: row.get::<_, i64>(6)?.max(0) as u64,
+                    wins: row.get::<_, i64>(6)?.max(0) as u64,
+                    losses: row.get::<_, i64>(7)?.max(0) as u64,
                 })
             },
         )

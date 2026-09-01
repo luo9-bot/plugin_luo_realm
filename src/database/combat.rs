@@ -1,100 +1,111 @@
 use rusqlite::{Transaction, params};
 
-use crate::{core::CombatResult, database::activity};
+use crate::{
+    combat::{CombatOutcome, CombatSnapshot},
+    database::activity,
+};
 
 use super::{DatabaseError, DatabaseResult, player_id, unix_timestamp, wallet};
 
-pub struct DuelParticipant<'a> {
-    pub user_id: u64,
-    pub system_id: &'a str,
-    pub realm_index: u32,
-    pub power_before: f64,
-    pub hp_before: i64,
-}
-
-pub fn record_duel(
+pub fn record_battle(
     transaction: &Transaction<'_>,
     group_id: u64,
-    left: DuelParticipant<'_>,
-    right: DuelParticipant<'_>,
-    result: &CombatResult,
+    snapshot: &CombatSnapshot,
+    outcome: &CombatOutcome,
 ) -> DatabaseResult<i64> {
     let now = unix_timestamp();
-    let winner_id: u64 = result
-        .winner_id
-        .parse()
-        .map_err(|_| DatabaseError::InvalidIdentifier)?;
+    let snapshot_json = serde_json::to_string(snapshot)
+        .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+    let outcome_json = serde_json::to_string(outcome)
+        .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
     transaction
         .execute(
             "INSERT INTO combat_records(
-                 combat_type, group_id, seed, winner_player_id, rounds, started_at, finished_at
-             ) VALUES('duel', ?1, ?2, ?3, ?4, ?5, ?5)",
+                 combat_type, group_id, seed, rule_version, winner_team,
+                 end_reason, elapsed_ticks, snapshot_json, outcome_json,
+                 started_at, finished_at
+             ) VALUES('duel', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
             params![
                 player_id(group_id)?,
-                result.seed.to_string(),
-                player_id(winner_id)?,
-                result.rounds,
-                now
+                snapshot.seed.to_string(),
+                snapshot.rule_version,
+                outcome.winner_team,
+                format!("{:?}", outcome.end_reason).to_ascii_lowercase(),
+                outcome.elapsed_ticks,
+                snapshot_json,
+                outcome_json,
+                now,
             ],
         )
         .map_err(DatabaseError::from_sqlite)?;
     let combat_id = transaction.last_insert_rowid();
-    [(0, &left, result.left_hp), (1, &right, result.right_hp)]
-        .into_iter()
-        .try_for_each(|(side, participant, health)| {
+    snapshot
+        .combatants
+        .iter()
+        .filter_map(|combatant| combatant.player_id.map(|player_id| (player_id, combatant)))
+        .try_for_each(|(player_id_value, combatant)| {
+            let health = outcome
+                .combatants
+                .iter()
+                .find(|entry| entry.combatant_id == combatant.combatant_id)
+                .map(|entry| entry.health)
+                .unwrap_or(0);
             transaction
                 .execute(
                     "INSERT INTO combat_participants(
-                         combat_id, player_id, side, system_id, realm_index,
-                         power_before, hp_before, hp_after
-                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                         combat_id, player_id, team, combatant_id, system_id,
+                         universal_tier, power_before, hp_before, hp_after
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
                         combat_id,
-                        player_id(participant.user_id)?,
-                        side,
-                        participant.system_id,
-                        participant.realm_index,
-                        participant.power_before.round() as i64,
-                        participant.hp_before,
-                        health
+                        player_id(player_id_value)?,
+                        combatant.team,
+                        combatant.combatant_id,
+                        combatant.system_id,
+                        combatant.universal_tier,
+                        combatant.power,
+                        combatant.attributes.max_health,
+                        health,
                     ],
                 )
                 .map_err(DatabaseError::from_sqlite)?;
             Ok(())
         })?;
-    result
-        .frames
+    outcome.events.iter().try_for_each(|event| {
+        let event_json = serde_json::to_string(event)
+            .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+        transaction
+            .execute(
+                "INSERT INTO combat_events(combat_id, sequence, tick, event_json)
+                 VALUES(?1, ?2, ?3, ?4)",
+                params![combat_id, event.sequence, event.tick, event_json],
+            )
+            .map_err(DatabaseError::from_sqlite)?;
+        Ok(())
+    })?;
+    let winners = snapshot
+        .combatants
         .iter()
-        .enumerate()
-        .try_for_each(|(index, frame)| {
-            let frame_json = serde_json::to_string(frame)
-                .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
-            transaction
-                .execute(
-                    "INSERT INTO combat_rounds(combat_id, round_index, frame_json)
-                     VALUES(?1, ?2, ?3)",
-                    params![combat_id, index as i64 + 1, frame_json],
-                )
-                .map_err(DatabaseError::from_sqlite)?;
-            Ok(())
-        })?;
-    let loser_id = if winner_id == left.user_id {
-        right.user_id
-    } else {
-        left.user_id
-    };
-    [(winner_id, 500, "wins"), (loser_id, 150, "losses")]
-        .into_iter()
-        .try_for_each(|(user_id, amount, metric)| {
+        .filter(|combatant| combatant.team == outcome.winner_team)
+        .filter_map(|combatant| combatant.player_id);
+    winners
+        .map(|user_id| {
             wallet::credit(
                 transaction,
                 user_id,
                 "coins",
-                amount,
+                500,
                 "duel_reward",
                 &format!("combat:{combat_id}:{user_id}:coins"),
             )?;
-            activity::increment_statistic(transaction, user_id, metric, 1)
-        })?;
+            activity::increment_statistic(transaction, user_id, "wins", 1)
+        })
+        .collect::<DatabaseResult<Vec<_>>>()?;
+    snapshot
+        .combatants
+        .iter()
+        .filter(|combatant| combatant.team != outcome.winner_team)
+        .filter_map(|combatant| combatant.player_id)
+        .try_for_each(|user_id| activity::increment_statistic(transaction, user_id, "losses", 1))?;
     Ok(combat_id)
 }
