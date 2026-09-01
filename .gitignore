@@ -66,3 +66,5 @@ tools/
 tool/
 
 webgames/
+
+*.md
