@@ -14,6 +14,7 @@ mod paths;
 mod render;
 
 use std::{
+    panic::{self, AssertUnwindSafe},
     path::{Path, PathBuf},
     sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
     thread,
@@ -228,22 +229,26 @@ fn run_message_worker(
         }
     };
     receiver.iter().for_each(|work| {
-        match route_message(
-            &mut database,
-            &root,
-            &policy,
-            work.context,
-            work.user_id,
-            &work.message,
-        ) {
-            Ok(Some(reply)) if work.is_group => {
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            route_message(
+                &mut database,
+                &root,
+                &policy,
+                work.context,
+                work.user_id,
+                &work.message,
+            )
+        }));
+        match result {
+            Ok(Ok(Some(reply))) if work.is_group => {
                 let _ = send::send_group_msg(work.group_id, &reply);
             }
-            Ok(Some(reply)) => {
+            Ok(Ok(Some(reply))) => {
                 let _ = send::send_private_msg(work.user_id, &reply);
             }
-            Ok(None) => {}
-            Err(error) => eprintln!("[Luo Realm] command failed: {error}"),
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => eprintln!("[Luo Realm] command failed: {error}"),
+            Err(_) => eprintln!("[Luo Realm] command panicked and was contained"),
         }
     });
 }

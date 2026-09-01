@@ -20,6 +20,13 @@ pub fn render(
     outcome: &CombatOutcome,
     path: &Path,
 ) -> io::Result<()> {
+    if snapshot.combatants.len() < 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "combat snapshot must contain two combatants",
+        ));
+    }
+
     let assets = assets::RealmAssets::discover(root);
     let mut bytes = Vec::new();
     {
@@ -365,6 +372,10 @@ fn event_delay(kind: &CombatEventKind) -> u16 {
 }
 
 fn fill(image: &mut RgbaImage, x: u32, y: u32, width: u32, height: u32, color: Rgba<u8>) {
+    if width == 0 || height == 0 {
+        return;
+    }
+
     imageproc::drawing::draw_filled_rect_mut(
         image,
         Rect::at(x as i32, y as i32).of_size(width, height),

@@ -47,5 +47,7 @@ impl Player {
 
 pub fn stable_seed(day: &str, scope: &str, identifier: &str, salt: &str) -> u64 {
     let digest = Sha256::digest(format!("{day}|{scope}|{identifier}|{salt}").as_bytes());
-    u64::from_be_bytes(digest[0..8].try_into().expect("SHA-256 长度固定"))
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    u64::from_be_bytes(bytes)
 }

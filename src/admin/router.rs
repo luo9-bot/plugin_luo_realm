@@ -152,33 +152,39 @@ pub fn error(status: u16, code: &str, message: &str) -> HttpResponse {
 }
 
 fn json(status: u16, value: serde_json::Value) -> HttpResponse {
-    secure_headers(
-        Response::from_data(value.to_string().into_bytes())
-            .with_status_code(StatusCode(status))
-            .with_header(header("Content-Type", "application/json; charset=utf-8")),
-    )
+    let response =
+        Response::from_data(value.to_string().into_bytes()).with_status_code(StatusCode(status));
+    secure_headers(with_header(
+        response,
+        "Content-Type",
+        "application/json; charset=utf-8",
+    ))
 }
 
 fn html(content: &str) -> HttpResponse {
-    secure_headers(
-        Response::from_data(content.as_bytes().to_vec())
-            .with_header(header("Content-Type", "text/html; charset=utf-8"))
-            .with_header(header(
-                "Content-Security-Policy",
-                "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'",
-            )),
-    )
+    let response = Response::from_data(content.as_bytes().to_vec());
+    let response = with_header(response, "Content-Type", "text/html; charset=utf-8");
+    secure_headers(with_header(
+        response,
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'",
+    ))
 }
 
 fn static_text(content: &str, content_type: &str) -> HttpResponse {
-    secure_headers(
-        Response::from_data(content.as_bytes().to_vec())
-            .with_header(header("Content-Type", content_type)),
-    )
+    secure_headers(with_header(
+        Response::from_data(content.as_bytes().to_vec()),
+        "Content-Type",
+        content_type,
+    ))
 }
 
 pub fn binary(bytes: Vec<u8>, content_type: &str) -> HttpResponse {
-    secure_headers(Response::from_data(bytes).with_header(header("Content-Type", content_type)))
+    secure_headers(with_header(
+        Response::from_data(bytes),
+        "Content-Type",
+        content_type,
+    ))
 }
 
 pub fn download(bytes: Vec<u8>, content_type: &str, filename: &str) -> HttpResponse {
@@ -188,24 +194,24 @@ pub fn download(bytes: Vec<u8>, content_type: &str, filename: &str) -> HttpRespo
             character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
         })
         .collect::<String>();
-    secure_headers(
-        Response::from_data(bytes)
-            .with_header(header("Content-Type", content_type))
-            .with_header(header(
-                "Content-Disposition",
-                &format!("attachment; filename=\"{safe_name}\""),
-            )),
-    )
+    let response = with_header(Response::from_data(bytes), "Content-Type", content_type);
+    secure_headers(with_header(
+        response,
+        "Content-Disposition",
+        &format!("attachment; filename=\"{safe_name}\""),
+    ))
 }
 
 fn secure_headers(response: HttpResponse) -> HttpResponse {
-    response
-        .with_header(header("Cache-Control", "no-store"))
-        .with_header(header("X-Content-Type-Options", "nosniff"))
-        .with_header(header("X-Frame-Options", "DENY"))
-        .with_header(header("Referrer-Policy", "no-referrer"))
+    let response = with_header(response, "Cache-Control", "no-store");
+    let response = with_header(response, "X-Content-Type-Options", "nosniff");
+    let response = with_header(response, "X-Frame-Options", "DENY");
+    with_header(response, "Referrer-Policy", "no-referrer")
 }
 
-fn header(name: &str, value: &str) -> Header {
-    Header::from_bytes(name, value).expect("static HTTP header must be valid")
+fn with_header(response: HttpResponse, name: &str, value: &str) -> HttpResponse {
+    match Header::from_bytes(name, value) {
+        Ok(header) => response.with_header(header),
+        Err(_) => response,
+    }
 }
