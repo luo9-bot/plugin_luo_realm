@@ -59,7 +59,6 @@ test/
 **/test_*.rs
 **/*_test.rs
 **/*_tests.rs
-**/tests.rs
 *.snap
 
 tools/
