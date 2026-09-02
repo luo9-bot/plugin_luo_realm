@@ -196,6 +196,33 @@ pub struct SkillDefinition {
     pub mastery: u8,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkillVisualConfig {
+    pub primary_color: String,
+    pub secondary_color: String,
+    pub icon_asset: Option<String>,
+    pub effect_asset: Option<String>,
+    pub arc_style: String,
+    pub arc_width: u32,
+    pub arc_duration: u32,
+    pub flash_color: String,
+}
+
+impl Default for SkillVisualConfig {
+    fn default() -> Self {
+        Self {
+            primary_color: "#00b4d8".into(),
+            secondary_color: "#48cae4".into(),
+            icon_asset: None,
+            effect_asset: None,
+            arc_style: "sweep".into(),
+            arc_width: 12,
+            arc_duration: 8,
+            flash_color: "#00b4d8".into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CombatAttributes {
     pub max_health: i64,

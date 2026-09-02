@@ -12,6 +12,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (5, include_str!("../../migrations/0005_ascii_fpv.sql")),
     (6, include_str!("../../migrations/0006_game_sessions.sql")),
     (7, include_str!("../../migrations/0007_combat_ecs.sql")),
+    (8, include_str!("../../migrations/0008_skill_configs.sql")),
 ];
 
 pub(crate) const CURRENT_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;

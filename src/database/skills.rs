@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::combat::{
-    SkillCategory, SkillDefinition, Tactic, active_slot_capacity, default_loadout, skill_by_id,
-    skills_for_system,
+    SkillCategory, SkillDefinition, SkillVisualConfig, Tactic, active_slot_capacity,
+    default_loadout, skill_by_id, skills_for_system,
 };
 
 use super::{DatabaseError, DatabaseResult, player_id, unix_timestamp};
@@ -18,6 +20,131 @@ pub struct BattleLoadout {
     pub passive: Vec<SkillDefinition>,
     pub domain: Option<SkillDefinition>,
     pub tactic: Tactic,
+}
+
+#[derive(serde::Serialize)]
+pub struct SkillConfig {
+    pub definition: SkillDefinition,
+    pub visual: SkillVisualConfig,
+    pub enabled: bool,
+}
+
+pub fn list_configs(connection: &rusqlite::Connection) -> DatabaseResult<Vec<SkillConfig>> {
+    let mut statement = connection
+        .prepare("SELECT skill_id, definition_json, visual_json, enabled FROM combat_skill_configs ORDER BY skill_id")
+        .map_err(DatabaseError::from_sqlite)?;
+    let configured = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, bool>(3)?,
+            ))
+        })
+        .map_err(DatabaseError::from_sqlite)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DatabaseError::from_sqlite)?;
+    let mut overrides = configured
+        .into_iter()
+        .map(|(_, definition, visual, enabled)| {
+            let definition: SkillDefinition = serde_json::from_str(&definition)
+                .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+            let visual: SkillVisualConfig = serde_json::from_str(&visual)
+                .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+            Ok((
+                definition.id.clone(),
+                SkillConfig {
+                    definition,
+                    visual,
+                    enabled,
+                },
+            ))
+        })
+        .collect::<DatabaseResult<HashMap<_, _>>>()?;
+    let mut result = [
+        "orthodox",
+        "sword",
+        "body",
+        "mage",
+        "soul",
+        "qi",
+        "blood_demon",
+        "formation",
+        "alchemy_artifact",
+        "summoner",
+        "music",
+    ]
+    .into_iter()
+    .flat_map(skills_for_system)
+    .map(|definition| {
+        let id = definition.id.clone();
+        overrides.remove(&id).unwrap_or(SkillConfig {
+            definition,
+            visual: SkillVisualConfig::default(),
+            enabled: true,
+        })
+    })
+    .collect::<Vec<_>>();
+    result.extend(overrides.into_values());
+    result.sort_unstable_by(|left, right| left.definition.id.cmp(&right.definition.id));
+    Ok(result)
+}
+
+pub fn upsert_config(
+    transaction: &Transaction<'_>,
+    definition: &SkillDefinition,
+    visual: &SkillVisualConfig,
+    enabled: bool,
+) -> DatabaseResult<()> {
+    let definition_json = serde_json::to_string(definition)
+        .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+    let visual_json = serde_json::to_string(visual)
+        .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
+    transaction
+        .execute(
+            "INSERT INTO combat_skill_configs(skill_id, definition_json, visual_json, enabled, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(skill_id) DO UPDATE SET definition_json=excluded.definition_json,
+                 visual_json=excluded.visual_json, enabled=excluded.enabled, updated_at=excluded.updated_at",
+            params![definition.id, definition_json, visual_json, enabled, unix_timestamp()],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    Ok(())
+}
+
+pub fn delete_config(transaction: &Transaction<'_>, skill_id: &str) -> DatabaseResult<()> {
+    let changed = transaction
+        .execute(
+            "DELETE FROM combat_skill_configs WHERE skill_id=?1",
+            [skill_id],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    if changed == 0 {
+        return Err(DatabaseError::NotFound);
+    }
+    Ok(())
+}
+
+fn configured_definition(
+    transaction: &Transaction<'_>,
+    skill_id: &str,
+) -> DatabaseResult<Option<SkillDefinition>> {
+    let value = transaction
+        .query_row(
+            "SELECT definition_json, enabled FROM combat_skill_configs WHERE skill_id=?1",
+            [skill_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
+        )
+        .optional()
+        .map_err(DatabaseError::from_sqlite)?;
+    value
+        .filter(|(_, enabled)| *enabled)
+        .map(|(definition, _)| {
+            serde_json::from_str(&definition)
+                .map_err(|error| DatabaseError::InvalidData(error.to_string()))
+        })
+        .transpose()
 }
 
 pub fn ensure_unlocked(
@@ -64,7 +191,8 @@ pub fn list(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult<Vec<P
         .map_err(DatabaseError::from_sqlite)?;
     rows.into_iter()
         .map(|(skill_id, mastery, branch_code)| {
-            let definition = skill_by_id(&skill_id)
+            let definition = configured_definition(transaction, &skill_id)?
+                .or_else(|| skill_by_id(&skill_id))
                 .ok_or_else(|| DatabaseError::InvalidData(format!("技能定义不存在：{skill_id}")))?;
             Ok(PlayerSkill {
                 definition,
@@ -108,7 +236,8 @@ pub fn loadout(
     let definitions = rows
         .into_iter()
         .map(|(slot_type, slot_index, skill_id, mastery)| {
-            skill_by_id(&skill_id)
+            configured_definition(transaction, &skill_id)?
+                .or_else(|| skill_by_id(&skill_id))
                 .map(|mut definition| {
                     definition.mastery = mastery;
                     (slot_type, slot_index, definition)
@@ -160,7 +289,8 @@ pub fn configure(
     if slot_index >= capacity {
         return Err(DatabaseError::InvalidData("技能槽尚未解锁".into()));
     }
-    let definition = skill_by_id(skill_id)
+    let definition = configured_definition(transaction, skill_id)?
+        .or_else(|| skill_by_id(skill_id))
         .filter(|skill| skill.category == category && skill.unlock_tier <= tier)
         .ok_or_else(|| DatabaseError::InvalidData("技能与槽位不匹配或尚未解锁".into()))?;
     let id = player_id(user_id)?;

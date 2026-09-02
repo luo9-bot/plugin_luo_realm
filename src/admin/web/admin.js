@@ -448,6 +448,69 @@ async function loadAssets(page = 1) {
     renderAssetPagination(data);
 }
 
+async function loadSkills() {
+    const data = await api('/api/skills');
+    const rows = data.map((item, index) => {
+        const row = document.createElement('tr');
+        tableCell(row, item.definition.name);
+        tableCell(row, item.definition.system_id);
+        tableCell(row, item.enabled ? '启用' : '停用');
+        tableCell(row, '').appendChild(makeButton('编辑', () => editSkill(item), 'button'));
+        return row;
+    });
+    byId('skillRows').replaceChildren(...rows);
+    if (data.length && !state.skill) editSkill(data[0]);
+}
+
+function editSkill(item) {
+    state.skill = item;
+    const form = byId('skillEditor');
+    form.className = 'detail-pane form-layout';
+    form.replaceChildren(
+        element('h2', '', `${item.definition.name} · ${item.definition.id}`),
+        element('label', '', '技能本体 JSON'),
+        Object.assign(document.createElement('textarea'), { id: 'skillDefinition', value: JSON.stringify(item.definition, null, 2), spellcheck: false }),
+        element('label', '', '战斗表现 JSON'),
+        Object.assign(document.createElement('textarea'), { id: 'skillVisual', value: JSON.stringify(item.visual, null, 2), spellcheck: false }),
+        inputField('启用状态（true/false）', 'skillEnabled', item.enabled ? 'true' : 'false'),
+        makeButton('保存技能', saveSkill, 'button primary'),
+        makeButton('删除自定义配置', deleteSkill, 'button danger'),
+    );
+}
+
+async function saveSkill() {
+    if (!state.skill) return;
+    let definition;
+    let visual;
+    try {
+        definition = JSON.parse(byId('skillDefinition').value);
+        visual = JSON.parse(byId('skillVisual').value);
+    } catch { return notify('JSON 格式无效', true); }
+    const skillId = state.skill.definition.id;
+    const confirmation = `skill:${skillId}:update`;
+    const action = await requestAction({ title: '保存技能配置', confirmation });
+    if (!action) return;
+    try {
+        await api(`/api/skills/${encodeURIComponent(skillId)}`, { method: 'PUT', body: JSON.stringify({ definition, visual, enabled: byId('skillEnabled').value === 'true', ...action }) });
+        notify('技能配置已保存');
+        await loadSkills();
+    } catch (error) { notify(error.message, true); }
+}
+
+async function deleteSkill() {
+    if (!state.skill) return;
+    const skillId = state.skill.definition.id;
+    const confirmation = `skill:${skillId}:delete`;
+    const action = await requestAction({ title: '删除技能配置', confirmation, danger: true });
+    if (!action) return;
+    try {
+        await api(`/api/skills/${encodeURIComponent(skillId)}`, { method: 'DELETE', body: JSON.stringify(action) });
+        state.skill = null;
+        notify('技能配置已删除');
+        await loadSkills();
+    } catch (error) { notify(error.message, true); }
+}
+
 async function loadAssetPreview(path, root) {
     try {
         const response = await rawRequest(`/api/assets/file?path=${encodeURIComponent(path)}`);
@@ -649,12 +712,13 @@ const pageLoaders = {
     groups: loadGroups,
     players: loadPlayers,
     assets: () => loadAssets(1),
+    skills: loadSkills,
     data: async () => {},
     settings: loadSettings,
     audit: loadAudit,
 };
 
-const pageTitles = { dashboard: '概览', groups: '群聊', players: '玩家', assets: '素材库', data: '数据', settings: '设置', audit: '审计' };
+const pageTitles = { dashboard: '概览', groups: '群聊', players: '玩家', assets: '素材库', skills: '技能', data: '数据', settings: '设置', audit: '审计' };
 
 async function openPage(name) {
     document.querySelectorAll('.page').forEach(page => page.classList.toggle('active', page.id === name));

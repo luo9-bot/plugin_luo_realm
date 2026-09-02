@@ -31,6 +31,7 @@
                 <button data-page="groups">群聊</button>
                 <button data-page="players">玩家</button>
                 <button data-page="assets">素材库</button>
+                <button data-page="skills">技能</button>
                 <button data-page="data">数据</button>
                 <button data-page="settings">设置</button>
                 <button data-page="audit">审计</button>
@@ -88,6 +89,14 @@
                     <div id="assetGrid" class="asset-grid"></div>
                     <div id="assetPagination" class="pagination"></div>
                     <input id="assetImportInput" class="hidden" type="file" accept=".zip,application/zip">
+                </section>
+
+                <section id="skills" class="page">
+                    <div class="page-heading"><h1>技能配置</h1><button class="button" data-refresh="skills">刷新</button></div>
+                    <div class="master-detail">
+                        <div class="master-pane"><div class="table-shell"><table><thead><tr><th>技能</th><th>体系</th><th>状态</th><th></th></tr></thead><tbody id="skillRows"></tbody></table></div></div>
+                        <form id="skillEditor" class="detail-pane empty-state"><p>选择一个技能进行编辑</p></form>
+                    </div>
                 </section>
 
                 <section id="data" class="page">

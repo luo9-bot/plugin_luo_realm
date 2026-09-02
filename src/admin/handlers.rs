@@ -1,6 +1,6 @@
 use std::{fs, sync::Arc};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tiny_http::Method;
 
 use crate::{
@@ -97,6 +97,12 @@ pub fn dispatch(method: &Method, url: &str, body: &[u8], state: &Arc<AdminState>
         (&Method::Get, ["api", "config"]) => json_value(state.policy.snapshot()),
         (&Method::Put, ["api", "config"]) => update_config(body, state),
         (&Method::Get, ["api", "definitions", "cultivation"]) => cultivation_definitions(),
+        (&Method::Get, ["api", "skills"]) => read_database(state, |database| {
+            crate::database::skills::list_configs(database.connection()).and_then(to_json)
+        }),
+        (&Method::Post, ["api", "skills"]) => create_skill(body, state),
+        (&Method::Put, ["api", "skills", skill_id]) => update_skill(body, state, skill_id),
+        (&Method::Delete, ["api", "skills", skill_id]) => delete_skill(body, state, skill_id),
         (&Method::Post, ["api", "backup"]) => create_backup(body, state),
         (&Method::Get, ["api", "assets"]) => list_assets(state, &query),
         (&Method::Get, ["api", "assets", "file"]) => read_asset(state, &query),
@@ -875,6 +881,82 @@ fn rotate_token(body: &[u8], state: &AdminState) -> HttpResponse {
         Ok(()) => ok(serde_json::json!({"rotated": true})),
         Err(error_value) => database_error(error_value),
     }
+}
+
+#[derive(Deserialize, Serialize)]
+struct SkillConfigRequest {
+    definition: crate::combat::SkillDefinition,
+    visual: crate::combat::SkillVisualConfig,
+    enabled: bool,
+    reason: String,
+    confirm: Option<String>,
+}
+
+fn update_skill(body: &[u8], state: &AdminState, skill_id: &str) -> HttpResponse {
+    let request: SkillConfigRequest = match parse(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if request.definition.id != skill_id
+        || !valid_code(skill_id)
+        || request.definition.name.trim().is_empty()
+        || !valid_reason(&request.reason)
+    {
+        return invalid("技能定义或修改原因不合法");
+    }
+    let confirmation = format!("skill:{skill_id}:update");
+    if !confirmed(&request.confirm, &confirmation) {
+        return confirmation_required(confirmation);
+    }
+    write_database(state, |transaction| {
+        crate::database::skills::upsert_config(
+            transaction,
+            &request.definition,
+            &request.visual,
+            request.enabled,
+        )?;
+        admin::audit_success(
+            transaction,
+            admin::AuditEntry {
+                operator: "web",
+                action: "skill.update",
+                target_type: "skill",
+                target_id: skill_id,
+                reason: request.reason.trim(),
+                before: None,
+                after: Some(serde_json::json!({"enabled": request.enabled})),
+            },
+        )?;
+        Ok(serde_json::json!({"skill_id": skill_id}))
+    })
+}
+
+fn create_skill(body: &[u8], state: &AdminState) -> HttpResponse {
+    let request: SkillConfigRequest = match parse(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let skill_id = request.definition.id.clone();
+    let encoded = match serde_json::to_vec(&request) {
+        Ok(encoded) => encoded,
+        Err(_) => return error(500, "serialization_failed", "技能配置无法序列化"),
+    };
+    update_skill(&encoded, state, &skill_id)
+}
+
+fn delete_skill(body: &[u8], state: &AdminState, skill_id: &str) -> HttpResponse {
+    let request: ReasonRequest = match parse(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let confirmation = format!("skill:{skill_id}:delete");
+    if !valid_reason(&request.reason) || !confirmed(&request.confirm, &confirmation) {
+        return confirmation_required(confirmation);
+    }
+    write_database(state, |transaction| {
+        crate::database::skills::delete_config(transaction, skill_id)?;
+        Ok(serde_json::json!({"skill_id": skill_id}))
+    })
 }
 
 fn json_value(value: impl serde::Serialize) -> HttpResponse {
