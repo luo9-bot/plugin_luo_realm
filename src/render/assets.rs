@@ -15,13 +15,37 @@ pub struct RealmAssets {
 
 impl RealmAssets {
     pub fn discover(plugin_root: &Path) -> Self {
-        let root = plugin_root.join("assets").join("realm");
+        let root = crate::paths::data_directory(plugin_root)
+            .join("assets")
+            .join("realm");
         let font = font_candidates(plugin_root).into_iter().find_map(load_font);
         Self { root, font }
     }
 
     pub fn font(&self) -> Option<&FontArc> {
         self.font.as_ref()
+    }
+
+    /// 技能图标（按技能名）；缺失时返回 None，由调用方降级绘制。
+    pub fn skill_icon(&self, skill_name: &str) -> Option<DynamicImage> {
+        self.skill_asset("skill_icons", skill_name)
+    }
+
+    /// 技能特效图（按技能名）；缺失时返回 None，由调用方降级绘制。
+    pub fn skill_effect(&self, skill_name: &str) -> Option<DynamicImage> {
+        self.skill_asset("skill_effects", skill_name)
+    }
+
+    fn skill_asset(&self, kind: &str, skill_name: &str) -> Option<DynamicImage> {
+        if skill_name.is_empty()
+            || skill_name.contains('/')
+            || skill_name.contains('\\')
+            || skill_name.contains("..")
+            || skill_name.chars().any(char::is_control)
+        {
+            return None;
+        }
+        image::open(self.root.join(kind).join(format!("{skill_name}.png"))).ok()
     }
 
     pub fn portrait(&self, player_id: &str) -> Option<DynamicImage> {
@@ -35,16 +59,21 @@ impl RealmAssets {
         image::open(&images[index]).ok()
     }
 
-    pub fn portrait_by_id(&self, avatar_id: &str) -> Option<DynamicImage> {
-        if avatar_id.is_empty()
-            || avatar_id.contains('/')
-            || avatar_id.contains('\\')
-            || avatar_id.contains("..")
-            || avatar_id.chars().any(char::is_control)
+    pub fn portrait_by_id(&self, character_id: &str) -> Option<DynamicImage> {
+        if character_id.is_empty()
+            || character_id.contains('/')
+            || character_id.contains('\\')
+            || character_id.contains("..")
+            || character_id.chars().any(char::is_control)
         {
             return None;
         }
-        image::open(self.root.join("portraits").join(format!("{avatar_id}.png"))).ok()
+        image::open(
+            self.root
+                .join("portraits")
+                .join(format!("{character_id}.png")),
+        )
+        .ok()
     }
 
     pub fn realm_badge(&self, realm_index: u32) -> Option<DynamicImage> {
@@ -87,7 +116,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 pub fn recover_asset_tree(plugin_root: &Path) -> io::Result<()> {
-    let root = plugin_root.join("assets");
+    let root = crate::paths::data_directory(plugin_root).join("assets");
     if !root.exists() {
         return Ok(());
     }
@@ -104,7 +133,10 @@ pub fn recover_atomic_write(path: &Path) -> io::Result<()> {
 
 fn font_candidates(plugin_root: &Path) -> Vec<PathBuf> {
     [
-        plugin_root.join("assets").join("fonts").join("font.ttf"),
+        crate::paths::data_directory(plugin_root)
+            .join("assets")
+            .join("fonts")
+            .join("font.ttf"),
         PathBuf::from(r"C:\Windows\Fonts\msyh.ttc"),
         PathBuf::from(r"C:\Windows\Fonts\simhei.ttf"),
         PathBuf::from(r"C:\Windows\Fonts\simsun.ttc"),

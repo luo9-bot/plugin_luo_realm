@@ -62,7 +62,9 @@ impl Default for GameConfig {
 
 impl RuntimeConfig {
     pub fn load(plugin_root: &Path) -> Result<Self, ConfigError> {
-        let path = plugin_root.join("config").join("config.toml");
+        let path = crate::paths::data_directory(plugin_root)
+            .join("config")
+            .join("config.toml");
         recover_file(&path)?;
         if !path.exists() {
             return Ok(Self::default());
@@ -82,7 +84,9 @@ impl RuntimeConfig {
 
     pub fn save(&self, plugin_root: &Path) -> Result<(), ConfigError> {
         self.validate()?;
-        let path = plugin_root.join("config").join("config.toml");
+        let path = crate::paths::data_directory(plugin_root)
+            .join("config")
+            .join("config.toml");
         let temporary = path.with_extension("toml.new");
         let content = toml::to_string_pretty(self)
             .map_err(|error| ConfigError::Serialize(Box::new(error)))?;
@@ -380,7 +384,9 @@ mod tests {
             "!lr"
         );
 
-        let path = directory.path().join("config").join("config.toml");
+        let path = crate::paths::data_directory(directory.path())
+            .join("config")
+            .join("config.toml");
         let backup = path.with_extension("toml.bak");
         let temporary = path.with_extension("toml.new");
         fs::rename(&path, &backup).unwrap();

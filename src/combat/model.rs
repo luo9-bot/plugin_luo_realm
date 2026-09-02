@@ -313,7 +313,7 @@ pub struct CombatantSnapshot {
     pub combatant_id: String,
     pub player_id: Option<u64>,
     pub display_name: String,
-    pub avatar_id: String,
+    pub character_id: String,
     pub system_id: String,
     pub universal_tier: u8,
     pub team: u8,

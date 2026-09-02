@@ -190,7 +190,7 @@ fn build_combatant_snapshot(
         combatant_id: player.user_id.clone(),
         player_id: player.user_id.parse().ok(),
         display_name: player.display_name.clone(),
-        avatar_id: player.avatar_id.clone(),
+        character_id: player.character_id.clone(),
         system_id: cultivation.system_id.clone(),
         universal_tier: tier,
         team,

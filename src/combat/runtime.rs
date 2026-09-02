@@ -15,7 +15,7 @@ use super::{
 struct Identity {
     id: String,
     name: String,
-    avatar_id: String,
+    character_id: String,
     system_id: String,
     player_id: Option<u64>,
     team: u8,
@@ -248,7 +248,7 @@ fn build_world(snapshot: &CombatSnapshot) -> World {
                 Identity {
                     id: combatant.combatant_id.clone(),
                     name: combatant.display_name.clone(),
-                    avatar_id: combatant.avatar_id.clone(),
+                    character_id: combatant.character_id.clone(),
                     system_id: combatant.system_id.clone(),
                     player_id: combatant.player_id,
                     team: combatant.team,
@@ -1507,7 +1507,7 @@ fn summon(
             Identity {
                 id: summon_id,
                 name: summon_name.clone(),
-                avatar_id: definition_id.into(),
+                character_id: definition_id.into(),
                 system_id,
                 player_id: None,
                 team,

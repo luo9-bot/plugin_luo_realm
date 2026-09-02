@@ -132,7 +132,7 @@ pub fn get_active(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult
     let player_id = player_id(user_id)?;
     transaction
         .query_row(
-            "SELECT p.player_id, profile.display_name, profile.avatar_id, cultivation.realm_index,
+            "SELECT p.player_id, profile.display_name, profile.character_id, cultivation.realm_index,
                     COALESCE(coins.amount, 0), COALESCE(marks.amount, 0),
                     COALESCE(wins.metric_value, 0), COALESCE(losses.metric_value, 0)
              FROM players p
@@ -154,7 +154,7 @@ pub fn get_active(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult
                 Ok(Player {
                     user_id: id.to_string(),
                     display_name: row.get(1)?,
-                    avatar_id: row.get(2)?,
+                    character_id: row.get(2)?,
                     level: realm_index + 1,
                     experience: 0,
                     coins: row.get::<_, i64>(4)?.max(0) as u64,

@@ -6,7 +6,7 @@ pub struct Player {
     pub user_id: String,
     pub display_name: String,
     #[serde(default)]
-    pub avatar_id: String,
+    pub character_id: String,
     pub level: u32,
     pub experience: u64,
     pub coins: u64,
@@ -28,7 +28,7 @@ impl Player {
         Self {
             user_id: user_id.to_string(),
             display_name: "LR·旅者".into(),
-            avatar_id: "default".into(),
+            character_id: "default".into(),
             level: 1,
             experience: 0,
             coins: 0,

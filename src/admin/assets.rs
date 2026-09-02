@@ -83,7 +83,7 @@ pub fn list(
     page: usize,
     limit: usize,
 ) -> Result<AssetPage, AssetError> {
-    let assets_root = plugin_root.join("assets");
+    let assets_root = crate::paths::data_directory(plugin_root).join("assets");
     if !assets_root.exists() {
         return Ok(AssetPage {
             categories: categories(),
@@ -155,7 +155,7 @@ pub fn remove(plugin_root: &Path, relative: &str) -> Result<(), AssetError> {
 }
 
 pub fn export(plugin_root: &Path) -> Result<Vec<u8>, AssetError> {
-    let assets_root = plugin_root.join("assets");
+    let assets_root = crate::paths::data_directory(plugin_root).join("assets");
     if assets_root.exists() {
         reject_link(&assets_root)?;
     }
@@ -184,12 +184,13 @@ pub fn export(plugin_root: &Path) -> Result<Vec<u8>, AssetError> {
 
 pub fn import(plugin_root: &Path, bytes: &[u8]) -> Result<ImportSummary, AssetError> {
     recover_bundle_import(plugin_root)?;
-    let assets_root = plugin_root.join("assets");
+    let data_directory = crate::paths::data_directory(plugin_root);
+    let assets_root = data_directory.join("assets");
     if assets_root.exists() {
         reject_link(&assets_root)?;
     }
-    let staging = plugin_root.join(".assets.import");
-    let backup = plugin_root.join(".assets.backup");
+    let staging = data_directory.join(".assets.import");
+    let backup = data_directory.join(".assets.backup");
     if assets_root.exists() {
         if let Err(error) = copy_tree(&assets_root, &staging) {
             let _ = fs::remove_dir_all(&staging);
@@ -272,10 +273,11 @@ fn collect_files(root: &Path) -> Result<Vec<PathBuf>, AssetError> {
 }
 
 pub fn recover_bundle_import(plugin_root: &Path) -> Result<(), AssetError> {
-    let assets = plugin_root.join("assets");
-    let staging = plugin_root.join(".assets.import");
-    let backup = plugin_root.join(".assets.backup");
-    let pending = plugin_root.join(".assets.pending");
+    let data_directory = crate::paths::data_directory(plugin_root);
+    let assets = data_directory.join("assets");
+    let staging = data_directory.join(".assets.import");
+    let backup = data_directory.join(".assets.backup");
+    let pending = data_directory.join(".assets.pending");
 
     if pending.exists() {
         let had_assets = fs::read_to_string(&pending)?.trim() == "existing";
@@ -311,8 +313,9 @@ pub fn recover_bundle_import(plugin_root: &Path) -> Result<(), AssetError> {
 }
 
 pub fn finalize_bundle_import(plugin_root: &Path) -> Result<(), AssetError> {
-    let pending = plugin_root.join(".assets.pending");
-    let backup = plugin_root.join(".assets.backup");
+    let data_directory = crate::paths::data_directory(plugin_root);
+    let pending = data_directory.join(".assets.pending");
+    let backup = data_directory.join(".assets.backup");
     if pending.exists() {
         fs::remove_file(pending)?;
         sync_directory(plugin_root)?;
@@ -333,7 +336,7 @@ fn resolve_asset_path(
     relative: &Path,
     create_parent: bool,
 ) -> Result<PathBuf, AssetError> {
-    let root = plugin_root.join("assets");
+    let root = crate::paths::data_directory(plugin_root).join("assets");
     if !root.exists() {
         if !create_parent {
             return Err(AssetError::NotFound);
@@ -397,7 +400,7 @@ fn commit_staging(
     staging: &Path,
     backup: &Path,
 ) -> Result<(), AssetError> {
-    let pending = plugin_root.join(".assets.pending");
+    let pending = crate::paths::data_directory(plugin_root).join(".assets.pending");
     crate::render::assets::atomic_write(
         &pending,
         if assets.exists() { b"existing" } else { b"new" },
