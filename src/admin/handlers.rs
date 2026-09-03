@@ -71,6 +71,10 @@ pub fn dispatch(method: &Method, url: &str, body: &[u8], state: &Arc<AdminState>
         (&Method::Put, ["api", "players", player_id, "profile"]) => {
             update_profile(body, state, player_id)
         }
+        (&Method::Put, ["api", "players", player_id, "character"]) => {
+            update_character(body, state, player_id)
+        }
+        (&Method::Get, ["api", "portraits"]) => portrait_list(state),
         (&Method::Post, ["api", "players", player_id, "wallet"]) => {
             adjust_wallet(body, state, player_id)
         }
@@ -248,6 +252,54 @@ struct ProfileRequest {
     status: String,
     reason: String,
     confirm: Option<String>,
+}
+
+/// 设置玩家的角色形象；空串表示跟随用户号的随机形象。
+#[derive(Deserialize)]
+struct CharacterRequest {
+    character_id: String,
+    reason: String,
+}
+
+/// 可选角色形象清单：供管理员为玩家指定形象时的下拉与预览。
+fn portrait_list(state: &AdminState) -> HttpResponse {
+    let ids = crate::render::assets::RealmAssets::discover(&state.plugin_root).portrait_ids();
+    let items = ids
+        .into_iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "preview_path": format!("realm/portraits/{id}.png"),
+            })
+        })
+        .collect::<Vec<_>>();
+    ok(serde_json::json!({ "items": items }))
+}
+
+fn update_character(body: &[u8], state: &AdminState, player_id: &str) -> HttpResponse {
+    let Some(player_id) = parse_id(player_id) else {
+        return invalid("玩家 ID 无效");
+    };
+    let request: CharacterRequest = match parse(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if !valid_reason(&request.reason) {
+        return invalid("修改原因不合法");
+    }
+    write_database(state, |transaction| {
+        admin::update_character(
+            transaction,
+            "web",
+            player_id,
+            &request.character_id,
+            request.reason.trim(),
+        )?;
+        Ok(serde_json::json!({
+            "player_id": player_id,
+            "character_id": request.character_id.trim(),
+        }))
+    })
 }
 
 fn update_profile(body: &[u8], state: &AdminState, player_id: &str) -> HttpResponse {
@@ -664,6 +716,7 @@ struct ConfigRequest {
     game: GameConfig,
     admin: AdminConfig,
     player_web: crate::config::PlayerWebConfig,
+    profile_card: crate::config::ProfileCardConfig,
     reason: String,
     confirm: Option<String>,
 }
@@ -687,6 +740,7 @@ fn update_config(body: &[u8], state: &AdminState) -> HttpResponse {
     config.game = request.game;
     config.admin = request.admin;
     config.player_web = request.player_web;
+    config.profile_card = request.profile_card;
     if let Err(config_error) = config.validate() {
         return error(400, "invalid_config", &config_error.to_string());
     }

@@ -27,6 +27,18 @@ pub fn battle(
     battle::render(root, snapshot, outcome, path)
 }
 
+/// 读取角色卡头像样式；配置缺失或损坏时回落默认（圆形 + 等比裁剪）。
+pub(crate) fn portrait_style(
+    root: &Path,
+) -> (crate::config::PortraitShape, crate::config::PortraitFill) {
+    crate::config::RuntimeConfig::load(root)
+        .map(|config| {
+            let card = config.profile_card;
+            (card.portrait_shape, card.portrait_fill)
+        })
+        .unwrap_or_default()
+}
+
 pub use card::{
     BagItemView, EquipmentCardData, EquippedSlotView, ItemDetailData, SkillCardData,
     SystemCardEntry,

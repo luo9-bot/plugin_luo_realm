@@ -20,6 +20,7 @@ pub struct RuntimeConfig {
     pub game: GameConfig,
     pub admin: AdminConfig,
     pub player_web: PlayerWebConfig,
+    pub profile_card: ProfileCardConfig,
 }
 
 impl Default for RuntimeConfig {
@@ -32,8 +33,43 @@ impl Default for RuntimeConfig {
             game: GameConfig::default(),
             admin: AdminConfig::default(),
             player_web: PlayerWebConfig::default(),
+            profile_card: ProfileCardConfig::default(),
         }
     }
+}
+
+/// 角色卡头像的外框形状。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortraitShape {
+    /// 圆形裁剪，双细金圈包边（默认）。
+    #[default]
+    Circle,
+    /// 方形裁剪，细线相框。
+    Square,
+    /// 无框直出，仅按填充方式取景。
+    Plain,
+}
+
+/// 角色卡立绘的填充方式。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortraitFill {
+    /// 等比缩放铺满并居中裁剪（默认；任何比例的立绘都不会被压扁）。
+    #[default]
+    Cover,
+    /// 等比缩放完整置入，不足处回填暗色。
+    Contain,
+    /// 强制拉伸铺满（旧行为，会改变宽高比，仅建议方形立绘使用）。
+    Stretch,
+}
+
+/// 角色卡头像呈现样式。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProfileCardConfig {
+    pub portrait_shape: PortraitShape,
+    pub portrait_fill: PortraitFill,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -510,5 +546,31 @@ mod tests {
         config.admin.port = 0;
 
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn profile_card_parses_shape_and_fill() {
+        let config = RuntimeConfig::default();
+        assert_eq!(
+            config.profile_card.portrait_shape,
+            super::PortraitShape::Circle
+        );
+        assert_eq!(
+            config.profile_card.portrait_fill,
+            super::PortraitFill::Cover
+        );
+
+        let parsed: RuntimeConfig = toml::from_str(
+            "[profile_card]\nportrait_shape = \"square\"\nportrait_fill = \"contain\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.profile_card.portrait_shape,
+            super::PortraitShape::Square
+        );
+        assert_eq!(
+            parsed.profile_card.portrait_fill,
+            super::PortraitFill::Contain
+        );
     }
 }

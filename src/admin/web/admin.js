@@ -483,7 +483,7 @@ async function renderPlayer(data) {
         bodies.appendChild(body);
     });
     root.append(heading, tabs, bodies);
-    renderProfile(data);
+    await renderProfile(data);
     await renderCharacter(data);
     renderWallet(data);
     renderItems(data);
@@ -495,7 +495,7 @@ function selectPlayerTab(key) {
     document.querySelectorAll('#playerDetail .tab-body').forEach(body => body.classList.toggle('active', body.id === `player-${key}`));
 }
 
-function renderProfile(data) {
+async function renderProfile(data) {
     const root = byId('player-profile');
     const statusLabel = element('label');
     const status = document.createElement('select');
@@ -514,8 +514,41 @@ function renderProfile(data) {
         inputField('修行进度', 'profileProgressReadonly', data.player.progress ?? 0, 'number'),
     );
     ['profileAccountId', 'profileProgressReadonly'].forEach(id => { byIdSoon(id, input => input.readOnly = true); });
+
+    let portraits = [];
+    try { portraits = (await api('/api/portraits')).items; } catch { /* 形象列表缺失时仍可清空跟随随机 */ }
+    const characterSelect = pairsSelect(
+        '角色形象',
+        'editCharacter',
+        [['', '随机（按 QQ 轮换）'], ...portraits.map(portrait => [portrait.id, `形象 ${portrait.id}`])],
+        data.player.character_id || '',
+    );
+    const characterPreview = element('div', 'portrait-preview small');
+    const previewImg = element('img');
+    previewImg.alt = '形象预览';
+    const syncCharacterPreview = () => {
+        const id = characterSelect.querySelector('select').value;
+        if (id) {
+            previewImg.src = `/api/assets/file?path=${encodeURIComponent(`realm/portraits/${id}.png`)}`;
+            previewImg.classList.remove('hidden');
+        } else {
+            previewImg.classList.add('hidden');
+        }
+    };
+    characterSelect.querySelector('select').addEventListener('change', syncCharacterPreview);
+    syncCharacterPreview();
+    characterPreview.appendChild(previewImg);
+    const characterRow = element('div', 'portrait-picker');
+    characterRow.append(characterSelect, characterPreview, makeButton('保存形象', () => saveCharacter(data.player.player_id), 'button'));
+
     const left = element('div');
-    left.append(form, makeButton('保存资料', () => saveProfile(data.player.player_id), 'button primary'));
+    left.append(
+        form,
+        element('h2', '', '角色形象'),
+        element('p', 'muted', '为该玩家固定一张立绘；选择「随机」则按 QQ 号轮换。'),
+        characterRow,
+        makeButton('保存资料', () => saveProfile(data.player.player_id), 'button primary'),
+    );
     const danger = element('div', 'danger-card');
     danger.append(
         element('h2', 'danger-title', '永久删除玩家'),
@@ -525,6 +558,16 @@ function renderProfile(data) {
     const layout = element('div', 'profile-layout');
     layout.append(left, danger);
     root.replaceChildren(layout);
+}
+
+async function saveCharacter(playerId) {
+    const action = await requestAction({ title: '保存角色形象' });
+    if (!action) return;
+    try {
+        await api(`/api/players/${playerId}/character`, { method: 'PUT', body: JSON.stringify({ character_id: byId('editCharacter').value.trim(), reason: action.reason }) });
+        notify('角色形象已保存');
+        await loadPlayer(playerId);
+    } catch (error) { notify(error.message, true); }
 }
 
 /// tab 内容是同步构建后插入 DOM 的；对个别新节点做补丁时用它排队执行。
@@ -751,6 +794,30 @@ async function setItemQualities(playerId) {
         notify(`已调整 ${result.updated} 件物品为 ${quality}`);
         await loadPlayer(playerId);
     } catch (error) { notify(error.message, true); }
+}
+
+/// 设置页的角色卡头像预览：取素材库第一张立绘做示意，缺失时只留形状框。
+async function loadPortraitPreview() {
+    const img = byId('portraitPreviewImg');
+    try {
+        const data = await api('/api/portraits');
+        if (data.items.length) {
+            img.src = `/api/assets/file?path=${encodeURIComponent(data.items[0].preview_path)}`;
+            img.classList.remove('hidden');
+            return;
+        }
+    } catch { /* 无素材库时保留占位 */ }
+    img.classList.add('hidden');
+}
+
+function syncPortraitPreview() {
+    const frame = byId('portraitPreview');
+    const img = byId('portraitPreviewImg');
+    const shape = byId('portraitShape').value;
+    const fill = byId('portraitFill').value;
+    frame.style.borderRadius = shape === 'circle' ? '50%' : shape === 'square' ? '12px' : '0';
+    frame.style.borderColor = shape === 'plain' ? 'transparent' : '';
+    img.style.objectFit = fill === 'cover' ? 'cover' : fill === 'contain' ? 'contain' : 'fill';
 }
 
 async function grantItem(playerId) {
@@ -1247,6 +1314,11 @@ async function loadSettings() {
     byId('sessionTtl').value = playerWeb.session_ttl_minutes;
     byId('syncUrl').value = playerWeb.sync_url;
     byId('syncToken').value = playerWeb.sync_token;
+    const profileCard = state.config.profile_card;
+    byId('portraitShape').value = profileCard.portrait_shape;
+    byId('portraitFill').value = profileCard.portrait_fill;
+    syncPortraitPreview();
+    await loadPortraitPreview();
     const systems = await api('/api/definitions/cultivation');
     byId('systems').replaceChildren(...systems.map(system => {
         const row = element('div', 'definition-row');
@@ -1255,8 +1327,7 @@ async function loadSettings() {
     }));
 }
 
-function normalizeRewardPublicKey(value) {
-    const assignment = value
+function normalizeRewardPublicKey(value) {    const assignment = value
         .split(/\r?\n/)
         .map(line => line.trim())
         .find(line => /^reward_public_key\s*=/i.test(line));
@@ -1301,6 +1372,10 @@ async function saveSettings(event) {
             session_ttl_minutes: Number(byId('sessionTtl').value),
             sync_url: byId('syncUrl').value.trim(),
             sync_token: byId('syncToken').value.trim(),
+        },
+        profile_card: {
+            portrait_shape: byId('portraitShape').value,
+            portrait_fill: byId('portraitFill').value,
         },
         ...action,
     };
@@ -1402,6 +1477,8 @@ byId('configForm').addEventListener('submit', saveSettings);
 byId('rewardPublicKey').addEventListener('input', event => event.currentTarget.setCustomValidity(''));
 byId('generateToken').addEventListener('click', generateToken);
 byId('rotateToken').addEventListener('click', rotateToken);
+byId('portraitShape').addEventListener('change', syncPortraitPreview);
+byId('portraitFill').addEventListener('change', syncPortraitPreview);
 byId('auditRefreshButton').addEventListener('click', loadAudit);
 
 if (state.token) authenticate(state.token).catch(() => sessionStorage.removeItem('lr_admin_token'));

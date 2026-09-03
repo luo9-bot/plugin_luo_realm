@@ -159,7 +159,7 @@ fn load_font(path: PathBuf) -> Option<FontArc> {
 }
 
 /// 角色 ID 只允许出现在单一路径段中，杜绝路径穿越。
-fn portrait_id_is_safe(character_id: &str) -> bool {
+pub(crate) fn portrait_id_is_safe(character_id: &str) -> bool {
     !character_id.is_empty()
         && !character_id.contains('/')
         && !character_id.contains('\\')

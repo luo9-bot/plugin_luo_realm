@@ -38,6 +38,7 @@ pub struct GroupRow {
 pub struct PlayerRow {
     pub player_id: i64,
     pub display_name: String,
+    pub character_id: String,
     pub status: String,
     pub registration_state: String,
     pub system_id: Option<String>,
@@ -194,7 +195,8 @@ pub fn list_players(
         .prepare(
             "SELECT p.player_id, profile.display_name, p.status, p.registration_state,
                     cultivation.system_id, cultivation.realm_index, cultivation.progress,
-                    COALESCE(coins.amount, 0), COALESCE(marks.amount, 0), p.updated_at
+                    COALESCE(coins.amount, 0), COALESCE(marks.amount, 0), p.updated_at,
+                    profile.character_id
              FROM players p
              JOIN player_profiles profile USING(player_id)
              LEFT JOIN player_cultivation cultivation USING(player_id)
@@ -224,7 +226,8 @@ pub fn player_detail(connection: &Connection, user_id: u64) -> DatabaseResult<Pl
         .query_row(
             "SELECT p.player_id, profile.display_name, p.status, p.registration_state,
                     cultivation.system_id, cultivation.realm_index, cultivation.progress,
-                    COALESCE(coins.amount, 0), COALESCE(marks.amount, 0), p.updated_at
+                    COALESCE(coins.amount, 0), COALESCE(marks.amount, 0), p.updated_at,
+                    profile.character_id
              FROM players p
              JOIN player_profiles profile USING(player_id)
              LEFT JOIN player_cultivation cultivation USING(player_id)
@@ -368,6 +371,56 @@ pub fn update_profile(
             after: Some(serde_json::json!({
                 "display_name": display_name, "status": status
             })),
+        },
+    )
+}
+
+/// 设置玩家的角色形象 ID；空串表示跟随用户号的随机形象。
+pub fn update_character(
+    transaction: &Transaction<'_>,
+    operator: &str,
+    user_id: u64,
+    character_id: &str,
+    reason: &str,
+) -> DatabaseResult<()> {
+    let id = player_id(user_id)?;
+    let normalized = character_id.trim();
+    if !normalized.is_empty() && !crate::render::assets::portrait_id_is_safe(normalized) {
+        return Err(DatabaseError::InvalidData(
+            "character id contains forbidden characters".into(),
+        ));
+    }
+    let before: String = transaction
+        .query_row(
+            "SELECT character_id FROM player_profiles WHERE player_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(DatabaseError::from_sqlite)?
+        .ok_or(DatabaseError::NotFound)?;
+    transaction
+        .execute(
+            "UPDATE player_profiles SET character_id=?2 WHERE player_id=?1",
+            params![id, normalized],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    transaction
+        .execute(
+            "UPDATE players SET revision=revision+1, updated_at=?2 WHERE player_id=?1",
+            params![id, unix_timestamp()],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    audit_success(
+        transaction,
+        AuditEntry {
+            operator,
+            action: "player.character.update",
+            target_type: "player",
+            target_id: &user_id.to_string(),
+            reason,
+            before: Some(serde_json::json!({ "character_id": before })),
+            after: Some(serde_json::json!({ "character_id": normalized })),
         },
     )
 }
@@ -848,6 +901,7 @@ fn player_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlayerRow> {
     Ok(PlayerRow {
         player_id: row.get(0)?,
         display_name: row.get(1)?,
+        character_id: row.get(10)?,
         status: row.get(2)?,
         registration_state: row.get(3)?,
         system_id: row.get(4)?,

@@ -191,6 +191,13 @@ tbody tr:hover { background: #fafbfe; }
 .tag-pill.on { border-color: transparent; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .set-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 96px; gap: 10px; align-items: end; }
 .set-row .slot-cell { min-width: 0; }
+.portrait-preview { width: 110px; height: 110px; flex: 0 0 auto; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-subtle); }
+.portrait-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.portrait-preview.small { width: 72px; height: 72px; }
+.portrait-preview-row { display: flex; align-items: center; gap: 18px; }
+.portrait-preview-note { max-width: 560px; margin: 0; }
+.portrait-picker { display: flex; align-items: end; gap: 14px; flex-wrap: wrap; }
+.portrait-picker select { min-width: 230px; }
 
 .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .asset-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }

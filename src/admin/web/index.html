@@ -123,6 +123,12 @@
                         <div class="section-heading"><h2>Cloudflare 快照推送（可选增强）</h2></div>
                         <label><span>Worker 接收地址（留空为直连模式）</span><input id="syncUrl" spellcheck="false" placeholder="https://worker.example.workers.dev/sync"></label>
                         <label><span>推送共享密钥（至少 32 字符，与 Worker 端一致）</span><input id="syncToken" type="password" autocomplete="off"></label>
+                        <div class="section-heading"><h2>角色卡头像</h2></div>
+                        <div class="form-grid"><label><span>头像形状</span><select id="portraitShape"><option value="circle">圆形（双细金圈）</option><option value="square">方形（细线相框）</option><option value="plain">无框直出</option></select></label><label><span>图片填充</span><select id="portraitFill"><option value="cover">等比裁剪（推荐，不变形）</option><option value="contain">完整显示（留边）</option><option value="stretch">拉伸铺满（旧版）</option></select></label></div>
+                        <div class="portrait-preview-row">
+                            <div id="portraitPreview" class="portrait-preview"><img id="portraitPreviewImg" class="hidden" alt="头像预览"></div>
+                            <p class="muted portrait-preview-note">预览为所选形状与填充的实时效果：等比裁剪下任何比例的立绘都不会变形；完整显示会在立绘不足处回填暗色。玩家的具体形象可在「玩家」页单独指定。</p>
+                        </div>
                         <div class="form-actions"><button class="button primary" type="submit">保存设置</button></div>
                     </form>
                     <div class="band"><div class="section-heading"><h2>修行体系</h2></div><div id="systems" class="definition-list"></div></div>
