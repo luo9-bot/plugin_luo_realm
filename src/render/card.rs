@@ -415,27 +415,27 @@ fn title_band(
     cy: i32,
 ) {
     let Some(font) = font else {
-        hline(image, 52, 384, cy - 6, GOLD_DIM);
-        hline(image, 576, 908, cy - 6, GOLD_DIM);
+        hline(image, 52, 376, cy - 7, GOLD_DIM);
+        hline(image, 584, 908, cy - 7, GOLD_DIM);
         return;
     };
     let center = WIDTH as i32 / 2;
-    let width = text_width(font, 28.0, title, 8.0);
+    let width = text_width(font, 34.0, title, 10.0);
     label_spaced(
         image,
         font,
-        28.0,
+        34.0,
         (center as f32 - width / 2.0).round() as i32,
-        cy - 20,
+        cy - 25,
         GOLD_BRIGHT,
         title,
-        8.0,
+        10.0,
     );
-    let gap = (width / 2.0 + 34.0).round() as i32;
-    hline(image, 52, center - gap, cy - 6, GOLD_DIM);
-    hline(image, center + gap, 908, cy - 6, GOLD_DIM);
-    diamond_filled(image, center - gap, cy - 6, 3, GOLD);
-    diamond_filled(image, center + gap, cy - 6, 3, GOLD);
+    let gap = (width / 2.0 + 40.0).round() as i32;
+    hline(image, 52, center - gap, cy - 7, GOLD_DIM);
+    hline(image, center + gap, 908, cy - 7, GOLD_DIM);
+    diamond_filled(image, center - gap, cy - 7, 3, GOLD);
+    diamond_filled(image, center + gap, cy - 7, 3, GOLD);
 }
 
 /// 页脚提示：一行暗金小字。
@@ -444,7 +444,7 @@ fn footnote(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, font: Option<&FontArc>, 
         label_centered(
             image,
             font,
-            14.0,
+            18.0,
             WIDTH as i32 / 2,
             FOOTNOTE_Y,
             TEXT_MUTE,
@@ -533,7 +533,7 @@ pub fn menu(root: &Path, path: &Path) -> io::Result<()> {
     let mut image = blank("menu");
     title_band(&mut image, assets.font(), "洛界 · 玩法", 60);
 
-    const SECTION_SPLIT: i32 = 186;
+    const SECTION_SPLIT: i32 = 160;
     const ROW_BOUNDS: [i32; 5] = [100, 197, 293, 390, 486];
     let sections: [(&str, &[&str]); 4] = [
         (
@@ -577,9 +577,9 @@ pub fn menu(root: &Path, path: &Path) -> io::Result<()> {
             label_centered(
                 &mut image,
                 font,
-                21.0,
+                26.0,
                 (LEFT + SECTION_SPLIT) / 2,
-                row_top + 37,
+                row_top + 33,
                 GOLD_BRIGHT,
                 title,
                 3.0,
@@ -592,8 +592,8 @@ pub fn menu(root: &Path, path: &Path) -> io::Result<()> {
                     vline(
                         &mut image,
                         column_x,
-                        row_top + 18,
-                        row_bottom - 18,
+                        row_top + 16,
+                        row_bottom - 16,
                         LINE_FAINT,
                     );
                     for &row_y in &ROW_BOUNDS[1..4] {
@@ -603,9 +603,9 @@ pub fn menu(root: &Path, path: &Path) -> io::Result<()> {
                 label_centered(
                     &mut image,
                     font,
-                    18.0,
+                    24.0,
                     column_x + column_width / 2,
-                    row_top + 39,
+                    row_top + 35,
                     TEXT_MAIN,
                     item,
                     2.0,
@@ -670,26 +670,26 @@ pub fn systems(root: &Path, entries: &[SystemCardEntry], path: &Path) -> io::Res
             let row_top = ROW_BOUNDS[row];
             diamond_filled(
                 &mut image,
-                x0 + 34,
-                row_top + 24,
-                4,
+                x0 + 36,
+                row_top + 25,
+                5,
                 system_color(&entry.id),
             );
             label(
                 &mut image,
                 font,
-                20.0,
-                x0 + 56,
-                row_top + 13,
+                24.0,
+                x0 + 58,
+                row_top + 11,
                 GOLD_BRIGHT,
                 &entry.name,
             );
             label(
                 &mut image,
                 font,
-                13.0,
-                x0 + 56,
-                row_top + 40,
+                17.0,
+                x0 + 58,
+                row_top + 41,
                 TEXT_SUB,
                 &format!("{} · {}", entry.id, entry.positioning),
             );
@@ -725,45 +725,45 @@ pub fn skills(root: &Path, data: &SkillCardData<'_>, path: &Path) -> io::Result<
         label(
             &mut image,
             font,
-            26.0,
+            32.0,
             64,
-            104,
+            100,
             GOLD_BRIGHT,
             data.display_name,
         );
         label_right(
             &mut image,
             font,
-            16.0,
+            20.0,
             896,
-            112,
+            110,
             accent,
             &format!("{} · 战术 {}", data.system_name, data.tactic_name),
             2.0,
         );
-        divider(&mut image, 64, 896, 148, GOLD);
+        divider(&mut image, 64, 896, 150, GOLD);
         for (index, (name, mastery)) in data.skills.iter().enumerate().take(8) {
-            let row_top = 166 + index as i32 * 40;
-            label(&mut image, font, 19.0, 64, row_top + 9, TEXT_MAIN, name);
+            let row_top = 170 + index as i32 * 39;
+            label(&mut image, font, 24.0, 64, row_top + 5, TEXT_MAIN, name);
             for pip in 0..3_u8 {
-                let pip_x = 690 + pip as i32 * 38;
+                let pip_x = 700 + pip as i32 * 42;
                 if *mastery > pip {
-                    diamond_filled(&mut image, pip_x, row_top + 18, 7, accent);
+                    diamond_filled(&mut image, pip_x, row_top + 17, 8, accent);
                 } else {
-                    diamond_hollow(&mut image, pip_x, row_top + 18, 7, LINE_FAINT);
+                    diamond_hollow(&mut image, pip_x, row_top + 17, 8, LINE_FAINT);
                 }
             }
             label(
                 &mut image,
                 font,
-                14.0,
-                800,
-                row_top + 12,
+                18.0,
+                794,
+                row_top + 9,
                 TEXT_MUTE,
                 &format!("{mastery}/3"),
             );
             if index < 7 {
-                hline(&mut image, 64, 896, row_top + 40, LINE_FAINT);
+                hline(&mut image, 64, 896, row_top + 39, LINE_FAINT);
             }
         }
         if data.skills.len() > 8 {
@@ -888,23 +888,23 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
         label(
             &mut image,
             font,
-            26.0,
+            32.0,
             64,
-            104,
+            100,
             GOLD_BRIGHT,
             data.display_name,
         );
         label_right(
             &mut image,
             font,
-            16.0,
+            20.0,
             896,
-            112,
+            110,
             accent,
             &format!("{} · 装备栏", data.system_name),
             2.0,
         );
-        divider(&mut image, 64, 896, 148, GOLD);
+        divider(&mut image, 64, 896, 150, GOLD);
 
         for (index, (slot_code, slot_name)) in SLOT_ORDER.into_iter().enumerate() {
             let x = 64 + index as i32 * 100;
@@ -919,7 +919,7 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
                         &mut image,
                         font,
                         x,
-                        166,
+                        168,
                         78,
                         ring,
                         assets.equipment_icon(&slot.item_name),
@@ -928,22 +928,22 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
                     label(
                         &mut image,
                         font,
-                        12.0,
+                        16.0,
                         x,
-                        252,
+                        254,
                         TEXT_MAIN,
-                        &truncate_name(&slot.item_name, 7),
+                        &truncate_name(&slot.item_name, 6),
                     );
                 }
                 None => {
-                    tile_frame(&mut image, x, 166, 78, LINE_FAINT);
-                    diamond_hollow(&mut image, x + 39, 205, 10, LINE_FAINT);
+                    tile_frame(&mut image, x, 168, 78, LINE_FAINT);
+                    diamond_hollow(&mut image, x + 39, 207, 10, LINE_FAINT);
                 }
             }
             label(
                 &mut image,
                 font,
-                12.0,
+                16.0,
                 x,
                 slot_name_y(slot.is_some()),
                 TEXT_MUTE,
@@ -951,19 +951,19 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
             );
         }
 
-        divider(&mut image, 64, 896, 306, GOLD);
-        label(&mut image, font, 17.0, 64, 322, GOLD_BRIGHT, "背包");
+        divider(&mut image, 64, 896, 310, GOLD);
+        label(&mut image, font, 22.0, 64, 326, GOLD_BRIGHT, "背包");
         if data.bag.is_empty() {
-            label(&mut image, font, 14.0, 150, 330, TEXT_MUTE, "暂无其他物品");
+            label(&mut image, font, 18.0, 160, 332, TEXT_MUTE, "暂无其他物品");
         }
         for (index, item) in data.bag.iter().enumerate().take(7) {
-            let x = 150 + index as i32 * 92;
+            let x = 160 + index as i32 * 92;
             let (ring, _, _) = tier_of(root, &item.quality);
             item_tile(
                 &mut image,
                 font,
                 x,
-                354,
+                358,
                 56,
                 ring,
                 assets.equipment_icon(&item.name),
@@ -972,9 +972,9 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
             label(
                 &mut image,
                 font,
-                12.0,
+                16.0,
                 x,
-                418,
+                422,
                 TEXT_SUB,
                 &format!("×{}", item.quantity),
             );
@@ -983,9 +983,9 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
             label(
                 &mut image,
                 font,
-                14.0,
-                150 + 7 * 92,
-                376,
+                18.0,
+                160 + 7 * 92,
+                380,
                 TEXT_SUB,
                 &format!("+{}", data.bag.len() - 7),
             );
@@ -997,7 +997,7 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
 
 /// 槽位名的纵坐标：已装备格下方让位给物品名，空格则紧贴格底。
 fn slot_name_y(occupied: bool) -> i32 {
-    if occupied { 270 } else { 252 }
+    if occupied { 276 } else { 254 }
 }
 
 fn truncate_name(name: &str, limit: usize) -> String {
@@ -1057,29 +1057,29 @@ pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::R
         label_centered(
             &mut image,
             font,
-            21.0,
+            24.0,
             196,
-            278,
+            276,
             GOLD_BRIGHT,
-            &truncate_name(data.definition_id, 9),
+            &truncate_name(data.definition_id, 8),
             2.0,
         );
-        let star_start = 196 - (stars.max(1) as i32 - 1) * 11;
+        let star_start = 196 - (stars.max(1) as i32 - 1) * 12;
         for star in 0..stars.max(1) {
-            diamond_filled(&mut image, star_start + star as i32 * 22, 318, 5, ring);
+            diamond_filled(&mut image, star_start + star as i32 * 24, 320, 6, ring);
         }
-        label_centered(&mut image, font, 14.0, 196, 336, ring, &rarity_name, 2.0);
+        label_centered(&mut image, font, 18.0, 196, 340, ring, &rarity_name, 2.0);
         let state = match data.equipped_slot {
             Some(slot) => format!("已装备 · {}", slot_display_name(slot)),
             None => "未装备".to_owned(),
         };
-        label_centered(&mut image, font, 14.0, 196, 372, TEXT_SUB, &state, 2.0);
+        label_centered(&mut image, font, 18.0, 196, 376, TEXT_SUB, &state, 2.0);
         label_centered(
             &mut image,
             font,
-            13.0,
+            17.0,
             196,
-            396,
+            404,
             TEXT_MUTE,
             &format!("编号 #{}", data.item_id),
             2.0,
@@ -1089,18 +1089,18 @@ pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::R
         label(
             &mut image,
             font,
-            16.0,
+            20.0,
             400,
-            112,
+            110,
             TEXT_SUB,
             &format!("强化 +{} · 持有 {}", data.level, data.quantity),
         );
-        divider(&mut image, 400, 896, 148, GOLD);
+        divider(&mut image, 400, 896, 150, GOLD);
         if data.modifiers.is_empty() {
             label(
                 &mut image,
                 font,
-                16.0,
+                20.0,
                 400,
                 190,
                 TEXT_MUTE,
@@ -1108,11 +1108,11 @@ pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::R
             );
         }
         for (index, (code, value)) in data.modifiers.iter().enumerate().take(7) {
-            let y = 176 + index as i32 * 42;
+            let y = 178 + index as i32 * 44;
             label(
                 &mut image,
                 font,
-                18.0,
+                24.0,
                 400,
                 y,
                 TEXT_MAIN,
@@ -1123,9 +1123,9 @@ pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::R
             } else {
                 value.to_string()
             };
-            label_right(&mut image, font, 18.0, 896, y, GAIN_TEXT, &display, 1.0);
+            label_right(&mut image, font, 24.0, 896, y, GAIN_TEXT, &display, 1.0);
             if index < data.modifiers.len().min(7) - 1 {
-                hline(&mut image, 400, 896, y + 32, LINE_FAINT);
+                hline(&mut image, 400, 896, y + 34, LINE_FAINT);
             }
         }
     }
@@ -1156,20 +1156,20 @@ pub fn destiny(root: &Path, data: &DestinyCardData<'_>, path: &Path) -> io::Resu
         label_centered(
             &mut image,
             font,
-            38.0,
+            46.0,
             WIDTH as i32 / 2,
-            180,
+            172,
             GOLD_BRIGHT,
             data.destiny_name,
-            10.0,
+            12.0,
         );
-        divider(&mut image, 330, 630, 256, GOLD);
+        divider(&mut image, 320, 640, 268, GOLD);
         label_centered(
             &mut image,
             font,
-            19.0,
+            24.0,
             WIDTH as i32 / 2,
-            290,
+            300,
             TEXT_MAIN,
             data.description,
             3.0,
@@ -1178,9 +1178,9 @@ pub fn destiny(root: &Path, data: &DestinyCardData<'_>, path: &Path) -> io::Resu
             label_centered(
                 &mut image,
                 font,
-                14.0,
+                18.0,
                 WIDTH as i32 / 2,
-                448,
+                444,
                 TEXT_MUTE,
                 line,
                 2.0,
@@ -1214,47 +1214,47 @@ pub fn world_event(root: &Path, data: &WorldEventCardData<'_>, path: &Path) -> i
         label(
             &mut image,
             font,
-            25.0,
+            30.0,
             64,
-            106,
+            102,
             GOLD_BRIGHT,
             data.event_name,
         );
-        let badge_width = text_width(font, 14.0, data.status, 2.0) as i32 + 36;
+        let badge_width = text_width(font, 18.0, data.status, 2.0) as i32 + 40;
         let badge_x1 = 896;
         let badge_x0 = badge_x1 - badge_width;
         let badge_line = if data.completed { GOLD } else { GOLD_DIM };
-        hline(&mut image, badge_x0, badge_x1, 104, badge_line);
-        hline(&mut image, badge_x0, badge_x1, 136, badge_line);
-        vline(&mut image, badge_x0, 104, 136, badge_line);
-        vline(&mut image, badge_x1, 104, 136, badge_line);
+        hline(&mut image, badge_x0, badge_x1, 100, badge_line);
+        hline(&mut image, badge_x0, badge_x1, 140, badge_line);
+        vline(&mut image, badge_x0, 100, 140, badge_line);
+        vline(&mut image, badge_x1, 100, 140, badge_line);
         label_centered(
             &mut image,
             font,
-            14.0,
+            18.0,
             (badge_x0 + badge_x1) / 2,
-            112,
+            110,
             accent,
             data.status,
             2.0,
         );
-        label(&mut image, font, 16.0, 64, 156, TEXT_SUB, data.description);
-        divider(&mut image, 64, 896, 200, GOLD);
+        label(&mut image, font, 20.0, 64, 158, TEXT_SUB, data.description);
+        divider(&mut image, 64, 896, 206, GOLD);
         for (index, (objective, current, target)) in data.objectives.iter().enumerate().take(3) {
-            let y = 222 + index as i32 * 82;
-            label(&mut image, font, 18.0, 64, y, TEXT_MAIN, objective);
+            let y = 226 + index as i32 * 84;
+            label(&mut image, font, 24.0, 64, y, TEXT_MAIN, objective);
             let ratio = if *target > 0 {
                 *current as f64 / *target as f64
             } else {
                 0.0
             };
-            thin_track(&mut image, 64, y + 36, 756, ratio, accent);
+            thin_track(&mut image, 64, y + 40, 756, ratio, accent);
             label_right(
                 &mut image,
                 font,
-                14.0,
+                18.0,
                 896,
-                y + 2,
+                y + 4,
                 TEXT_MUTE,
                 &format!("{current}/{target}"),
                 1.0,

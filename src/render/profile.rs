@@ -42,26 +42,26 @@ pub fn render(root: &Path, data: &ProfileRenderData<'_>, path: &Path) -> io::Res
     card::label(
         &mut image,
         font,
-        32.0,
+        38.0,
         INFO_X,
-        104,
+        98,
         card::GOLD_BRIGHT,
-        &data.player.display_name,
+        &truncate_display_name(&data.player.display_name),
     );
-    card::diamond_filled(&mut image, INFO_X + 8, 172, 4, accent);
+    card::diamond_filled(&mut image, INFO_X + 9, 172, 5, accent);
     card::label(
         &mut image,
         font,
-        17.0,
-        INFO_X + 26,
-        160,
+        22.0,
+        INFO_X + 30,
+        158,
         card::TEXT_SUB,
         &format!(
             "{} · {} · 等级 {}",
             data.system_name, data.realm_name, data.player.level
         ),
     );
-    card::divider(&mut image, INFO_X, INFO_RIGHT, 208, card::GOLD);
+    card::divider(&mut image, INFO_X, INFO_RIGHT, 212, card::GOLD);
 
     let columns: [(card::StatGlyph, &str, String); 3] = [
         (
@@ -79,13 +79,13 @@ pub fn render(root: &Path, data: &ProfileRenderData<'_>, path: &Path) -> io::Res
     let centers = [472_i32, 646, 820];
     for (index, (glyph, caption, value)) in columns.into_iter().enumerate() {
         let cx = centers[index];
-        card::ring_icon(&mut image, cx, 262, 23, card::GOLD, glyph);
+        card::ring_icon(&mut image, cx, 258, 26, card::GOLD, glyph);
         card::label_centered(
             &mut image,
             font,
-            14.0,
+            18.0,
             cx,
-            300,
+            298,
             card::TEXT_SUB,
             caption,
             2.0,
@@ -93,26 +93,26 @@ pub fn render(root: &Path, data: &ProfileRenderData<'_>, path: &Path) -> io::Res
         card::label_centered(
             &mut image,
             font,
-            23.0,
+            28.0,
             cx,
-            322,
+            320,
             card::GOLD_BRIGHT,
             &value,
             1.0,
         );
     }
     for &gap_x in &[559_i32, 733] {
-        card::vline(&mut image, gap_x, 234, 346, card::LINE_FAINT);
+        card::vline(&mut image, gap_x, 228, 352, card::LINE_FAINT);
     }
 
-    card::divider(&mut image, INFO_X, INFO_RIGHT, 388, card::GOLD);
+    card::divider(&mut image, INFO_X, INFO_RIGHT, 394, card::GOLD);
     let player = data.player;
     card::label_centered(
         &mut image,
         font,
-        14.0,
+        18.0,
         (INFO_X + INFO_RIGHT) / 2,
-        414,
+        416,
         card::TEXT_SUB,
         &format!(
             "生命 {} · 攻击 {} · 防御 {} · 刻印 {} · 胜 {} / 负 {}",
@@ -127,6 +127,18 @@ pub fn render(root: &Path, data: &ProfileRenderData<'_>, path: &Path) -> io::Res
     );
 
     card::encode(path, &image)
+}
+
+/// 名字过长时截断，避免大字号下压过右侧边界。
+fn truncate_display_name(name: &str) -> String {
+    const LIMIT: usize = 12;
+    if name.chars().count() <= LIMIT {
+        name.to_owned()
+    } else {
+        let mut truncated = name.chars().take(LIMIT).collect::<String>();
+        truncated.push('…');
+        truncated
+    }
 }
 
 /// 圆形头像：双细金圈夹一层山水底，立绘圆形裁剪贴入；缺失时画剪影人形。
