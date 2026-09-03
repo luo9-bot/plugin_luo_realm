@@ -40,6 +40,162 @@ function inputField(labelText, id, value, type = 'text') {
     return label;
 }
 
+function numberInput(labelText, id, value, step) {
+    const label = inputField(labelText, id, value, 'number');
+    if (step) label.querySelector('input').step = step;
+    return label;
+}
+
+function pairsSelect(labelText, id, pairs, value) {
+    const label = element('label');
+    if (labelText) label.append(element('span', '', labelText));
+    const select = document.createElement('select');
+    select.id = id;
+    pairs.forEach(([optionValue, optionLabel]) => {
+        const option = element('option', '', optionLabel);
+        option.value = optionValue;
+        select.appendChild(option);
+    });
+    select.value = String(value ?? '');
+    label.appendChild(select);
+    return label;
+}
+
+function enumSelect(labelText, id, options, value) {
+    return pairsSelect(labelText, id, Object.entries(options), value);
+}
+
+function checkInput(labelText, id, checked) {
+    const label = element('label', 'inline-check');
+    const input = document.createElement('input');
+    input.id = id;
+    input.type = 'checkbox';
+    input.checked = Boolean(checked);
+    label.append(input, element('span', '', labelText));
+    return label;
+}
+
+function colorInput(labelText, id, value) {
+    const label = inputField(labelText, id, value, 'color');
+    label.querySelector('input').style.padding = '4px';
+    return label;
+}
+
+function gridOf(...fields) {
+    const grid = element('div', 'form-grid');
+    grid.append(...fields);
+    return grid;
+}
+
+function hintField(labelText, id, value, hints) {
+    const label = inputField(labelText, id, value);
+    const datalist = document.createElement('datalist');
+    datalist.id = `${id}Hints`;
+    hints.forEach(hint => {
+        const option = element('option', '', hint);
+        option.value = hint;
+        datalist.appendChild(option);
+    });
+    label.querySelector('input').setAttribute('list', datalist.id);
+    label.appendChild(datalist);
+    return label;
+}
+
+const SYSTEM_OPTIONS = [
+    ['orthodox', '修真'], ['sword', '剑修'], ['body', '体修'], ['mage', '法修'],
+    ['soul', '灵修'], ['qi', '气修'], ['blood_demon', '血魔邪修'], ['formation', '阵修'],
+    ['alchemy_artifact', '丹器修'], ['summoner', '召唤流'], ['music', '音修'],
+];
+
+const SKILL_CATEGORIES = { active: '主动', passive: '被动', domain: '领域' };
+const TARGET_RULES = { self_target: '自身', single_enemy: '单一敌人', all_enemies: '全体敌人', lowest_health_ally: '最弱队友' };
+const SKILL_TAGS = {
+    attack: '攻击', charge: '蓄力', defense: '防御', healing: '治疗', shield: '护盾',
+    block: '格挡', dodge: '闪避', control: '控制', cleanse: '驱散', movement: '位移',
+    domain: '领域', summon: '召唤', ultimate: '绝技',
+};
+const DAMAGE_TYPES = { physical: '物理', arcane: '法术', soul: '魂', true: '真实' };
+const STATUS_KINDS = {
+    attack_up: '攻击提升', defense_up: '防御提升', speed_up: '速度提升',
+    damage_over_time: '持续伤害', healing_over_time: '持续回复',
+    healing_suppression: '治疗压制', stunned: '眩晕',
+};
+
+/// 效果类型 → 表单字段：[key, 类型, 中文标签, 附加参数]。
+/// 类型与字段名与 combat::model::SkillEffect 的 serde 序列化一一对应。
+const EFFECT_SCHEMAS = {
+    damage: { label: '伤害', fields: [
+        ['damage_type', 'enum', '伤害类型', DAMAGE_TYPES],
+        ['power_basis_points', 'number', '威力（万分比）', { step: 100 }],
+        ['flat', 'number', '固定加成', {}],
+        ['can_critical', 'bool', '可暴击', {}],
+        ['can_dodge', 'bool', '可闪避', {}],
+        ['blockable', 'bool', '可格挡', {}],
+    ] },
+    heal: { label: '治疗', fields: [
+        ['power_basis_points', 'number', '威力（万分比）', { step: 100 }],
+        ['flat', 'number', '固定加成', {}],
+    ] },
+    restore_resource: { label: '回复资源', fields: [
+        ['amount', 'number', '回复量', {}],
+    ] },
+    shield: { label: '护盾', fields: [
+        ['power_basis_points', 'number', '威力（万分比）', { step: 100 }],
+        ['duration', 'number', '持续回合', { default: 2 }],
+    ] },
+    block: { label: '格挡', fields: [
+        ['reduction_basis_points', 'number', '减伤（万分比）', { step: 100 }],
+        ['charges', 'number', '次数', { default: 1 }],
+        ['duration', 'number', '持续回合', { default: 2 }],
+    ] },
+    dodge: { label: '闪避', fields: [
+        ['charges', 'number', '次数', { default: 1 }],
+        ['duration', 'number', '持续回合', { default: 2 }],
+    ] },
+    move: { label: '位移', fields: [
+        ['distance_delta', 'number', '距离变化（负数拉近）', {}],
+    ] },
+    control: { label: '控制', fields: [
+        ['strength', 'number', '强度', {}],
+        ['duration', 'number', '持续回合', { default: 1 }],
+    ] },
+    cleanse: { label: '驱散', fields: [
+        ['count', 'number', '驱散数量', { default: 1 }],
+    ] },
+    status: { label: '状态', fields: [
+        ['status', 'enum', '状态类型', STATUS_KINDS],
+        ['magnitude_basis_points', 'number', '强度（万分比）', { step: 100 }],
+        ['duration', 'number', '持续回合', { default: 2 }],
+    ] },
+    summon: { label: '召唤', fields: [
+        ['definition_id', 'text', '单位定义 ID', {}],
+        ['health_basis_points', 'number', '生命（万分比）', { step: 100 }],
+        ['attack_basis_points', 'number', '攻击（万分比）', { step: 100 }],
+        ['duration', 'number', '持续回合', { default: 3 }],
+    ] },
+    domain: { label: '领域', fields: [
+        ['strength', 'number', '强度', {}],
+        ['duration', 'number', '持续回合', { default: 2 }],
+    ] },
+};
+
+const QUALITY_HINTS = ['common', 'fine', 'rare', 'epic'];
+const SLOT_OPTIONS = [
+    ['main_hand', '主手'], ['off_hand', '副手'], ['head', '头部'], ['body', '身体'],
+    ['hands', '手部'], ['feet', '足部'], ['accessory_1', '饰品一'], ['accessory_2', '饰品二'],
+];
+
+function defaultEffect(type) {
+    const effect = { type };
+    EFFECT_SCHEMAS[type].fields.forEach(([key, kind, , extra]) => {
+        effect[key] = kind === 'bool' ? false
+            : kind === 'enum' ? Object.keys(extra)[0]
+            : kind === 'number' ? (extra?.default ?? 0)
+            : '';
+    });
+    return effect;
+}
+
 function notify(message, bad = false) {
     const node = byId('notice');
     node.textContent = message;
@@ -338,7 +494,11 @@ async function saveWallet(playerId) {
 
 function renderCultivation(data) {
     const root = byId('player-cultivation');
-    root.append(inputField('体系标识', 'cultSystem', data.player.system_id || ''), inputField('境界索引', 'cultRealm', data.player.realm_index ?? 0, 'number'), inputField('修行进度', 'cultProgress', data.player.progress ?? 0, 'number'));
+    root.append(
+        hintField('体系标识', 'cultSystem', data.player.system_id || '', SYSTEM_OPTIONS.map(([value]) => value)),
+        numberInput('境界索引（0 起）', 'cultRealm', data.player.realm_index ?? 0),
+        numberInput('修行进度', 'cultProgress', data.player.progress ?? 0),
+    );
     root.appendChild(makeButton('保存修行状态', () => saveCultivation(data.player.player_id), 'button primary'));
 }
 
@@ -367,8 +527,75 @@ function renderItems(data) {
         tableCell(row, '').appendChild(makeButton('删除', () => deleteItem(data.player.player_id, item.item_instance_id), 'button danger'));
         table.appendChild(row);
     });
-    root.append(table, inputField('物品定义 ID', 'itemDefinition', ''), inputField('数量', 'itemQuantity', 1, 'number'), inputField('品质', 'itemQuality', 'common'));
-    root.appendChild(makeButton('发放物品', () => grantItem(data.player.player_id), 'button primary'));
+
+    const setRows = element('div');
+    setRows.id = 'setItemRows';
+    SLOT_OPTIONS.forEach(([slotValue, slotLabel]) => {
+        const row = element('div', 'set-row');
+        const slotSelect = pairsSelect('', `setSlot-${slotValue}`, [['', '不穿戴（入背包）'], ...SLOT_OPTIONS], slotValue);
+        slotSelect.classList.add('slot-cell');
+        row.append(
+            slotSelect,
+            inputField('定义 ID', `setDef-${slotValue}`, ''),
+            numberInput('数量', `setQty-${slotValue}`, 1),
+        );
+        setRows.appendChild(row);
+    });
+
+    const batchRow = gridOf(
+        hintField('目标品阶', 'batchQuality', 'rare', QUALITY_HINTS),
+        enumSelect('调整范围', 'batchScope', { equipped: '仅已装备', all: '全部物品' }, 'equipped'),
+    );
+
+    root.append(
+        element('h2', '', '单件发放'),
+        gridOf(
+            inputField('物品定义 ID', 'itemDefinition', ''),
+            numberInput('数量', 'itemQuantity', 1),
+            hintField('品质', 'itemQuality', 'common', QUALITY_HINTS),
+        ),
+        makeButton('发放物品', () => grantItem(data.player.player_id), 'button primary'),
+        element('h2', '', '整套装备（发放并按槽位穿戴）'),
+        hintField('套装品阶', 'setItemQuality', 'rare', QUALITY_HINTS),
+        setRows,
+        makeButton('发放整套装备', () => grantItemSet(data.player.player_id), 'button primary'),
+        element('h2', '', '批量调整品阶'),
+        batchRow,
+        makeButton('批量调整', () => setItemQualities(data.player.player_id), 'button primary'),
+    );
+}
+
+async function grantItemSet(playerId) {
+    const items = SLOT_OPTIONS
+        .map(([slotValue]) => ({
+            slot: byId(`setSlot-${slotValue}`).value || undefined,
+            definition_id: byId(`setDef-${slotValue}`).value.trim(),
+            quantity: Number(byId(`setQty-${slotValue}`).value) || 1,
+        }))
+        .filter(item => item.definition_id);
+    if (!items.length) return notify('请至少填写一件装备的定义 ID', true);
+    if (items.length > 12) return notify('整套装备最多 12 件', true);
+    const quality = byId('setItemQuality').value.trim();
+    const action = await requestAction({ title: '发放整套装备', message: `${items.length} 件 · 品阶 ${quality || '（未填）'}` });
+    if (!action) return;
+    try {
+        const result = await api(`/api/players/${playerId}/items/grant-set`, { method: 'POST', body: JSON.stringify({ quality, equip: true, items, reason: action.reason }) });
+        notify(`已发放 ${result.items.length} 件装备`);
+        await loadPlayer(playerId);
+    } catch (error) { notify(error.message, true); }
+}
+
+async function setItemQualities(playerId) {
+    const quality = byId('batchQuality').value.trim();
+    const scope = byId('batchScope').value;
+    const confirmation = `quality:${playerId}:${scope}:${quality}`;
+    const action = await requestAction({ title: '批量调整品阶', confirmation, danger: scope === 'all' });
+    if (!action) return;
+    try {
+        const result = await api(`/api/players/${playerId}/items/set-quality`, { method: 'POST', body: JSON.stringify({ quality, scope, reason: action.reason }) });
+        notify(`已调整 ${result.updated} 件物品为 ${quality}`);
+        await loadPlayer(playerId);
+    } catch (error) { notify(error.message, true); }
 }
 
 async function grantItem(playerId) {
@@ -464,34 +691,175 @@ async function loadSkills() {
 
 function editSkill(item) {
     state.skill = item;
+    state.effects = structuredClone(item.definition.effects || []);
+    const definition = item.definition;
     const form = byId('skillEditor');
     form.className = 'detail-pane form-layout';
-    form.replaceChildren(
-        element('h2', '', `${item.definition.name} · ${item.definition.id}`),
-        element('label', '', '技能本体 JSON'),
-        Object.assign(document.createElement('textarea'), { id: 'skillDefinition', value: JSON.stringify(item.definition, null, 2), spellcheck: false }),
-        element('label', '', '战斗表现 JSON'),
-        Object.assign(document.createElement('textarea'), { id: 'skillVisual', value: JSON.stringify(item.visual, null, 2), spellcheck: false }),
-        inputField('启用状态（true/false）', 'skillEnabled', item.enabled ? 'true' : 'false'),
+
+    const effectList = element('div', 'effect-list');
+    effectList.id = 'effectList';
+    const addSelect = document.createElement('select');
+    addSelect.appendChild(element('option', '', '+ 添加效果'));
+    Object.entries(EFFECT_SCHEMAS).forEach(([key, schema]) => {
+        const option = element('option', '', schema.label);
+        option.value = key;
+        addSelect.appendChild(option);
+    });
+    addSelect.addEventListener('change', () => {
+        if (!addSelect.value) return;
+        state.effects.push(defaultEffect(addSelect.value));
+        addSelect.value = '';
+        renderEffectList();
+    });
+
+    const visual = item.visual;
+    const visualDetails = document.createElement('details');
+    visualDetails.append(
+        element('summary', '', '战斗表现（颜色 / 弹道 / 素材名）'),
+        gridOf(
+            colorInput('主色', 'visualPrimary', visual.primary_color),
+            colorInput('副色', 'visualSecondary', visual.secondary_color),
+            colorInput('闪光色', 'visualFlash', visual.flash_color),
+            inputField('图标素材名（留空用默认）', 'visualIcon', visual.icon_asset ?? ''),
+            inputField('特效素材名（留空用默认）', 'visualEffectAsset', visual.effect_asset ?? ''),
+            inputField('弹道样式', 'visualArcStyle', visual.arc_style),
+            numberInput('弹道宽度', 'visualArcWidth', visual.arc_width),
+            numberInput('弹道时长', 'visualArcDuration', visual.arc_duration),
+        ),
+    );
+
+    const skillActions = element('div', 'form-actions');
+    skillActions.append(
         makeButton('保存技能', saveSkill, 'button primary'),
         makeButton('删除自定义配置', deleteSkill, 'button danger'),
     );
+    form.replaceChildren(
+        element('h2', '', `${definition.name} · ${definition.id}`),
+        element('h2', '', '基础参数'),
+        gridOf(
+            inputField('技能名称', 'skillName', definition.name),
+            pairsSelect('体系', 'skillSystem', SYSTEM_OPTIONS, definition.system_id),
+            enumSelect('类别', 'skillCategory', SKILL_CATEGORIES, definition.category),
+            enumSelect('目标规则', 'skillTarget', TARGET_RULES, definition.target),
+            numberInput('解锁阶', 'skillUnlockTier', definition.unlock_tier),
+            numberInput('行动点消耗', 'skillActionCost', definition.action_cost),
+            numberInput('资源消耗', 'skillResourceCost', definition.resource_cost),
+            numberInput('冷却（回合）', 'skillCooldown', definition.cooldown),
+            numberInput('吟唱（回合）', 'skillCastTime', definition.cast_time),
+            numberInput('最小距离', 'skillMinRange', definition.min_range),
+            numberInput('最大距离', 'skillMaxRange', definition.max_range),
+            numberInput('熟练度上限', 'skillMastery', definition.mastery ?? 0),
+        ),
+        element('h2', '', '标签'),
+        tagChecks(definition.tags || []),
+        element('h2', '', '效果序列（从上到下依次结算）'),
+        addSelect,
+        effectList,
+        visualDetails,
+        checkInput('启用该技能', 'skillEnabled', item.enabled),
+        skillActions,
+    );
+    renderEffectList();
+}
+
+function tagChecks(tags) {
+    const wrap = element('div', 'tag-checks');
+    wrap.id = 'skillTagChecks';
+    Object.entries(SKILL_TAGS).forEach(([key, label]) => {
+        const item = element('label', 'inline-check');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.value = key;
+        input.checked = tags.includes(key);
+        item.append(input, element('span', '', label));
+        wrap.appendChild(item);
+    });
+    return wrap;
+}
+
+function renderEffectList() {
+    const list = byId('effectList');
+    if (!list) return;
+    const cards = state.effects.map((effect, index) => effectCard(effect, index));
+    list.replaceChildren(...cards);
+    if (!state.effects.length) list.appendChild(element('p', 'muted', '尚无效果，用上方下拉添加。'));
+}
+
+function effectCard(effect, index) {
+    const schema = EFFECT_SCHEMAS[effect.type];
+    const card = element('div', 'effect-card');
+    const head = element('div', 'effect-head');
+    const typeSelect = document.createElement('select');
+    Object.entries(EFFECT_SCHEMAS).forEach(([key, definition]) => {
+        const option = element('option', '', definition.label);
+        option.value = key;
+        typeSelect.appendChild(option);
+    });
+    typeSelect.value = effect.type;
+    typeSelect.addEventListener('change', () => {
+        state.effects[index] = defaultEffect(typeSelect.value);
+        renderEffectList();
+    });
+    head.append(
+        typeSelect,
+        makeButton('移除', () => { state.effects.splice(index, 1); renderEffectList(); }, 'button danger'),
+    );
+    card.appendChild(head);
+    card.appendChild(gridOf(...schema.fields.map(([key, kind, label, extra]) => {
+        const id = `effect-${index}-${key}`;
+        return kind === 'bool' ? checkInput(label, id, effect[key])
+            : kind === 'enum' ? enumSelect(label, id, extra, effect[key])
+            : kind === 'number' ? numberInput(label, id, effect[key], extra?.step)
+            : inputField(label, id, effect[key]);
+    })));
+    return card;
 }
 
 async function saveSkill() {
     if (!state.skill) return;
-    let definition;
-    let visual;
-    try {
-        definition = JSON.parse(byId('skillDefinition').value);
-        visual = JSON.parse(byId('skillVisual').value);
-    } catch { return notify('JSON 格式无效', true); }
+    const numberValue = id => Number(byId(id).value) || 0;
+    const textValue = id => byId(id).value.trim();
+    state.effects.forEach((effect, index) => {
+        EFFECT_SCHEMAS[effect.type].fields.forEach(([key, kind]) => {
+            const input = byId(`effect-${index}-${key}`);
+            if (kind === 'bool') effect[key] = input.checked;
+            else if (kind === 'number') effect[key] = Number(input.value) || 0;
+            else effect[key] = input.value.trim();
+        });
+    });
+    const definition = {
+        id: state.skill.definition.id,
+        name: textValue('skillName') || state.skill.definition.name,
+        system_id: byId('skillSystem').value,
+        category: byId('skillCategory').value,
+        unlock_tier: numberValue('skillUnlockTier'),
+        action_cost: numberValue('skillActionCost'),
+        resource_cost: numberValue('skillResourceCost'),
+        cooldown: numberValue('skillCooldown'),
+        cast_time: numberValue('skillCastTime'),
+        min_range: numberValue('skillMinRange'),
+        max_range: numberValue('skillMaxRange'),
+        target: byId('skillTarget').value,
+        tags: [...document.querySelectorAll('#skillTagChecks input:checked')].map(input => input.value),
+        effects: state.effects,
+        mastery: numberValue('skillMastery'),
+    };
+    const visual = {
+        primary_color: byId('visualPrimary').value,
+        secondary_color: byId('visualSecondary').value,
+        icon_asset: textValue('visualIcon') || null,
+        effect_asset: textValue('visualEffectAsset') || null,
+        arc_style: textValue('visualArcStyle') || 'sweep',
+        arc_width: numberValue('visualArcWidth'),
+        arc_duration: numberValue('visualArcDuration'),
+        flash_color: byId('visualFlash').value,
+    };
     const skillId = state.skill.definition.id;
     const confirmation = `skill:${skillId}:update`;
     const action = await requestAction({ title: '保存技能配置', confirmation });
     if (!action) return;
     try {
-        await api(`/api/skills/${encodeURIComponent(skillId)}`, { method: 'PUT', body: JSON.stringify({ definition, visual, enabled: byId('skillEnabled').value === 'true', ...action }) });
+        await api(`/api/skills/${encodeURIComponent(skillId)}`, { method: 'PUT', body: JSON.stringify({ definition, visual, enabled: byId('skillEnabled').checked, ...action }) });
         notify('技能配置已保存');
         await loadSkills();
     } catch (error) { notify(error.message, true); }

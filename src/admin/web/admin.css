@@ -126,6 +126,19 @@ tbody tr:hover { background: #fafcfb; }
 .danger-row { background: var(--danger-soft); padding-inline: 16px; }
 .form-layout { display: grid; gap: 16px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.inline-check { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--text); font-size: 13px; }
+.inline-check input { width: 16px; min-height: 16px; height: 16px; }
+.tag-checks { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface-subtle); }
+.effect-list { display: grid; gap: 10px; }
+.effect-card { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface-subtle); }
+.effect-head { display: flex; align-items: center; gap: 10px; }
+.effect-head select { max-width: 200px; }
+.effect-head .button { margin-left: auto; }
+.set-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 96px; gap: 10px; align-items: end; }
+.set-row .slot-cell { min-width: 0; }
+details { border: 1px solid var(--line); background: var(--surface-subtle); }
+summary { padding: 12px 14px; cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+details > .form-grid { padding: 4px 14px 14px; }
 .definition-list { display: grid; gap: 10px; }
 .definition-row { display: grid; grid-template-columns: 170px 1fr; gap: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .definition-row:last-child { padding-bottom: 0; border-bottom: 0; }
@@ -158,6 +171,7 @@ dialog form { padding: 20px; }
     .toolbar, .page-heading, .operation-row, .health-band { align-items: stretch; flex-direction: column; }
     .toolbar label, .asset-toolbar label:nth-child(2) { width: 100%; max-width: none; }
     .form-grid { grid-template-columns: 1fr; }
+    .set-row { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {
