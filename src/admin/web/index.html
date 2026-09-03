@@ -24,28 +24,30 @@
         <aside class="sidebar">
             <div class="sidebar-brand">
                 <span class="product-mark small">LR</span>
-                <span>Luo Realm</span>
+                <div><strong>LRLuo Realm</strong><span>Luo Realm Console</span></div>
             </div>
             <nav class="navigation" aria-label="后台导航">
-                <button data-page="dashboard" class="active">概览</button>
-                <button data-page="groups">群聊</button>
-                <button data-page="players">玩家</button>
-                <button data-page="assets">素材库</button>
-                <button data-page="skills">技能</button>
-                <button data-page="data">数据</button>
-                <button data-page="settings">设置</button>
-                <button data-page="audit">审计</button>
+                <button data-page="dashboard" class="active"><span class="nav-icon">🏠</span><span>概览</span></button>
+                <button data-page="groups"><span>群聊</span></button>
+                <button data-page="players"><span>玩家</span></button>
+                <button data-page="assets"><span>素材库</span></button>
+                <button data-page="skills"><span>技能</span></button>
+                <button data-page="data"><span>数据</span></button>
+                <button data-page="settings"><span>设置</span></button>
+                <button data-page="audit"><span>审计</span></button>
             </nav>
-            <div class="sidebar-status"><span class="status-dot"></span>服务在线</div>
+            <div class="sidebar-foot">
+                <div class="sidebar-status"><span class="status-dot"></span>服务在线</div>
+                <button id="logout" class="logout-button"><span class="nav-icon">↪</span><span>退出</span></button>
+            </div>
         </aside>
 
         <div class="workspace">
             <header class="topbar">
-                <div>
-                    <span class="eyebrow">Luo Realm Console</span>
-                    <strong id="pageTitle">概览</strong>
+                <div class="user-block">
+                    <span class="product-mark small">LR</span>
+                    <div class="user-meta"><strong>Luo Realm Console</strong><span id="pageTitle">概览</span></div>
                 </div>
-                <button id="logout" class="button">退出</button>
             </header>
 
             <div class="content">

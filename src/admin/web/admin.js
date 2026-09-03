@@ -133,6 +133,40 @@ const SYSTEM_OPTIONS = [
 const SYSTEM_NAMES = Object.fromEntries(SYSTEM_OPTIONS);
 const systemName = id => SYSTEM_NAMES[id] || id || '—';
 
+/// 体系的展示图标与图标块底色（内联样式用，避免为一套配色扩表）。
+const SYSTEM_ICONS = {
+    orthodox: ['☯️', '#eef1fe'], sword: ['⚔️', '#e8f0fe'], body: ['💪', '#feece8'],
+    mage: ['🔮', '#f1ecfe'], soul: ['👻', '#f3ecfd'], qi: ['🌀', '#e6f7f2'],
+    blood_demon: ['🩸', '#feecef'], formation: ['🔲', '#e6f6ec'], alchemy_artifact: ['🧪', '#fff4e0'],
+    summoner: ['🐾', '#eaf6e6'], music: ['🎵', '#fdeaf3'],
+};
+
+/// 标签药丸的选中配色：[背景, 文字]。
+const TAG_COLORS = {
+    attack: ['#feecec', '#d64545'], charge: ['#fdf3e0', '#b45309'], defense: ['#e8f0fe', '#2f6fed'],
+    healing: ['#e5f8ef', '#12805c'], shield: ['#e6f4fb', '#0e7490'], block: ['#eef1fe', '#4a6cf7'],
+    dodge: ['#e6f7f2', '#0e9f6e'], control: ['#f1ecfe', '#7a4ff0'], cleanse: ['#e6f6ec', '#188a52'],
+    movement: ['#f7f1e6', '#8a6d3b'], domain: ['#f3ecfd', '#8b5cf6'], summon: ['#eaf6e6', '#4f9d2a'],
+    ultimate: ['#fff4e0', '#c07f00'],
+};
+
+/// 效果序列顶部的常用类型快捷按钮。
+const QUICK_EFFECTS = [
+    ['damage', '伤害'], ['heal', '治疗'], ['shield', '护盾'], ['status', '状态'], ['control', '控制'],
+];
+
+function switchRow(labelText, id, checked) {
+    const row = element('label', 'switch-row');
+    const toggle = element('span', 'switch-toggle');
+    const input = document.createElement('input');
+    input.id = id;
+    input.type = 'checkbox';
+    input.checked = Boolean(checked);
+    toggle.append(input, element('span', 'slider'));
+    row.append(element('span', '', labelText), toggle);
+    return row;
+}
+
 const SKILL_CATEGORIES = { active: '主动', passive: '被动', domain: '领域' };
 const TARGET_RULES = { self_target: '自身', single_enemy: '单一敌人', all_enemies: '全体敌人', lowest_health_ally: '最弱队友' };
 const SKILL_TAGS = {
@@ -820,11 +854,12 @@ function renderSkillSystems() {
     byId('skillSystemList').replaceChildren(...entries.map(([id, label, count]) => {
         const row = element('button', `skill-system-row${state.skillFilter === id ? ' active' : ''}`);
         row.type = 'button';
-        row.append(
-            element('span', 'system-swatch', label.slice(0, 1)),
-            element('span', 'system-name', label),
-            element('span', 'counter', count),
-        );
+        const [icon, background] = id ? (SYSTEM_ICONS[id] ?? ['📜', '#eef1fe']) : ['☰', '#ffffff'];
+        const swatch = element('span', 'system-swatch', icon);
+        swatch.style.background = background;
+        const name = element('span', 'system-name');
+        name.append(element('span', '', label), element('small', '', id || '汇总'));
+        row.append(swatch, name, element('span', 'counter', count));
         row.addEventListener('click', () => {
             state.skillFilter = id;
             renderSkillSystems();
@@ -875,43 +910,55 @@ function editSkill(item) {
 
     const effectList = element('div', 'effect-list');
     effectList.id = 'effectList';
-    const addSelect = document.createElement('select');
-    addSelect.appendChild(element('option', '', '+ 添加效果'));
+    const quickEffects = element('div', 'quick-effects');
+    QUICK_EFFECTS.forEach(([key, label]) => {
+        quickEffects.appendChild(makeButton(`+ ${label}`, () => {
+            state.effects.push(defaultEffect(key));
+            renderEffectList();
+        }, 'button'));
+    });
+    const moreSelect = document.createElement('select');
+    moreSelect.appendChild(element('option', '', '+ 更多效果'));
     Object.entries(EFFECT_SCHEMAS).forEach(([key, schema]) => {
+        if (QUICK_EFFECTS.some(([quickKey]) => quickKey === key)) return;
         const option = element('option', '', schema.label);
         option.value = key;
-        addSelect.appendChild(option);
+        moreSelect.appendChild(option);
     });
-    addSelect.addEventListener('change', () => {
-        if (!addSelect.value) return;
-        state.effects.push(defaultEffect(addSelect.value));
-        addSelect.value = '';
+    moreSelect.style.width = 'auto';
+    moreSelect.addEventListener('change', () => {
+        if (!moreSelect.value) return;
+        state.effects.push(defaultEffect(moreSelect.value));
+        moreSelect.value = '';
         renderEffectList();
     });
+    quickEffects.appendChild(moreSelect);
 
     const visual = item.visual;
+    const baseGrid = element('div', 'form-grid cols-4');
+    baseGrid.append(
+        inputField('技能名称', 'skillName', definition.name),
+        pairsSelect('体系', 'skillSystem', SYSTEM_OPTIONS, definition.system_id),
+        enumSelect('类别', 'skillCategory', SKILL_CATEGORIES, definition.category),
+        enumSelect('目标规则', 'skillTarget', TARGET_RULES, definition.target),
+        numberInput('解锁阶', 'skillUnlockTier', definition.unlock_tier),
+        numberInput('行动点消耗', 'skillActionCost', definition.action_cost),
+        numberInput('资源消耗', 'skillResourceCost', definition.resource_cost),
+        numberInput('冷却（回合）', 'skillCooldown', definition.cooldown),
+        numberInput('吟唱（回合）', 'skillCastTime', definition.cast_time),
+        numberInput('最小距离', 'skillMinRange', definition.min_range),
+        numberInput('最大距离', 'skillMaxRange', definition.max_range),
+        numberInput('熟练度上限', 'skillMastery', definition.mastery ?? 0),
+    );
     basicBody.replaceChildren(
         element('h2', '', '基础参数'),
-        gridOf(
-            inputField('技能名称', 'skillName', definition.name),
-            pairsSelect('体系', 'skillSystem', SYSTEM_OPTIONS, definition.system_id),
-            enumSelect('类别', 'skillCategory', SKILL_CATEGORIES, definition.category),
-            enumSelect('目标规则', 'skillTarget', TARGET_RULES, definition.target),
-            numberInput('解锁阶', 'skillUnlockTier', definition.unlock_tier),
-            numberInput('行动点消耗', 'skillActionCost', definition.action_cost),
-            numberInput('资源消耗', 'skillResourceCost', definition.resource_cost),
-            numberInput('冷却（回合）', 'skillCooldown', definition.cooldown),
-            numberInput('吟唱（回合）', 'skillCastTime', definition.cast_time),
-            numberInput('最小距离', 'skillMinRange', definition.min_range),
-            numberInput('最大距离', 'skillMaxRange', definition.max_range),
-            numberInput('熟练度上限', 'skillMastery', definition.mastery ?? 0),
-        ),
+        baseGrid,
         element('h2', '', '标签'),
         tagChecks(definition.tags || []),
     );
     effectsBody.replaceChildren(
         element('h2', '', '效果序列（从上到下依次结算）'),
-        addSelect,
+        quickEffects,
         effectList,
     );
     visualBody.replaceChildren(
@@ -929,20 +976,27 @@ function editSkill(item) {
 
     const skillActions = element('div', 'form-actions skill-actions');
     skillActions.append(
-        checkInput('启用该技能', 'skillEnabled', item.enabled),
+        switchRow('启用该技能', 'skillEnabled', item.enabled),
         element('span', 'spacer'),
         makeButton('保存技能', saveSkill, 'button primary'),
         makeButton('删除自定义配置', deleteSkill, 'button danger'),
     );
-    form.replaceChildren(
-        element('div', 'detail-heading',
-            element('h2', '', `${definition.name} · ${definition.id}`),
-            element('span', `pill ${item.enabled ? 'pill-ok' : 'pill-off'}`, item.enabled ? '启用中' : '已停用'),
-        ),
-        tabs,
-        bodies,
-        skillActions,
+
+    const [icon, iconBackground] = SYSTEM_ICONS[definition.system_id] ?? ['📜', '#eef1fe'];
+    const headIcon = element('span', 'skill-head-icon', icon);
+    headIcon.style.background = iconBackground;
+    const headTitle = element('div', 'head-title');
+    headTitle.append(
+        element('h2', '', definition.name),
+        element('span', 'muted', definition.id),
     );
+    const heading = element('div', 'detail-heading');
+    heading.append(
+        headIcon,
+        headTitle,
+        element('span', `pill ${item.enabled ? 'pill-ok' : 'pill-off'}`, item.enabled ? '启用中' : '已停用'),
+    );
+    form.replaceChildren(heading, tabs, bodies, skillActions);
     renderEffectList();
 }
 
@@ -955,13 +1009,21 @@ function tagChecks(tags) {
     const wrap = element('div', 'tag-checks');
     wrap.id = 'skillTagChecks';
     Object.entries(SKILL_TAGS).forEach(([key, label]) => {
-        const item = element('label', 'inline-check');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.value = key;
-        input.checked = tags.includes(key);
-        item.append(input, element('span', '', label));
-        wrap.appendChild(item);
+        const button = element('button', `tag-pill${tags.includes(key) ? ' on' : ''}`, label);
+        button.type = 'button';
+        button.dataset.tag = key;
+        const [background, color] = TAG_COLORS[key] ?? ['#eef1fe', '#4a6cf7'];
+        const sync = () => {
+            const on = button.classList.contains('on');
+            button.style.background = on ? background : '';
+            button.style.color = on ? color : '';
+        };
+        sync();
+        button.addEventListener('click', () => {
+            button.classList.toggle('on');
+            sync();
+        });
+        wrap.appendChild(button);
     });
     return wrap;
 }
@@ -1029,7 +1091,7 @@ async function saveSkill() {
         min_range: numberValue('skillMinRange'),
         max_range: numberValue('skillMaxRange'),
         target: byId('skillTarget').value,
-        tags: [...document.querySelectorAll('#skillTagChecks input:checked')].map(input => input.value),
+        tags: [...document.querySelectorAll('#skillTagChecks .tag-pill.on')].map(button => button.dataset.tag),
         effects: state.effects,
         mastery: numberValue('skillMastery'),
     };
