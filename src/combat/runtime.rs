@@ -1894,3 +1894,71 @@ fn identity_id(world: &World, entity: Entity) -> CombatantId {
         .map(|identity| identity.id.clone())
         .unwrap_or_else(|| CombatantId::new(format!("entity:{}", entity.to_bits())))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_battle;
+    use crate::combat::{
+        BattleRules, CombatAttributes, CombatSnapshot, CombatantSnapshot, ResourceKind,
+        ResourceSnapshot, Tactic, default_loadout,
+    };
+    use crate::domain::shared::{CombatantId, PowerScore, RuleVersion, SystemId};
+
+    fn combatant(id: &str, team: u8) -> CombatantSnapshot {
+        let (active, passive, domain) = default_loadout("sword", 3);
+        CombatantSnapshot {
+            combatant_id: CombatantId::new(id),
+            platform_user_id: None,
+            display_name: id.into(),
+            character_id: "default".into(),
+            system_id: SystemId::new("sword"),
+            universal_tier: 3,
+            team,
+            position: team as i32,
+            attributes: CombatAttributes {
+                max_health: 1_000,
+                attack: 140,
+                physical_defense: 120,
+                arcane_defense: 60,
+                soul_defense: 60,
+                speed: 40,
+                critical_rate_basis_points: 2_000,
+                critical_damage_basis_points: 20_000,
+                recovery_power: 30,
+                control_power: 30,
+                tenacity: 500,
+                domain_power: 20,
+            },
+            resource: ResourceSnapshot {
+                kind: ResourceKind::SwordIntent,
+                current: 100,
+                maximum: 100,
+                regeneration: 4,
+            },
+            active_skills: active,
+            passive_skills: passive,
+            domain_skill: domain,
+            equipment_triggers: Vec::new(),
+            tactic: Tactic::Aggressive,
+            power: PowerScore::saturating_new(9_000),
+        }
+    }
+
+    #[test]
+    fn same_snapshot_and_seed_reproduce_identical_outcome() {
+        let snapshot = CombatSnapshot {
+            rule_version: RuleVersion::INITIAL,
+            seed: 20260903,
+            rules: BattleRules::default(),
+            combatants: vec![combatant("A", 0), combatant("B", 1)],
+        };
+
+        let first = run_battle(&snapshot).expect("first run");
+        let second = run_battle(&snapshot).expect("second run");
+
+        assert_eq!(
+            first, second,
+            "相同快照、规则版本与种子必须产生完全相同的事件流与结果"
+        );
+    }
+}

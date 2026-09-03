@@ -125,3 +125,102 @@ fn change(
         balance_after,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{balance, credit, debit};
+    use crate::database::migrations;
+    use rusqlite::Connection;
+
+    fn memory_database() -> Connection {
+        let mut connection = Connection::open_in_memory().expect("open in-memory database");
+        migrations::apply(&mut connection).expect("apply migrations");
+        connection
+            .execute(
+                "INSERT INTO players(player_id, created_at, updated_at) VALUES(10001, 0, 0)",
+                [],
+            )
+            .expect("insert player");
+        connection
+    }
+
+    fn transaction_of(connection: &mut Connection) -> rusqlite::Transaction<'_> {
+        connection.transaction().expect("begin transaction")
+    }
+
+    fn count_transactions(connection: &Connection, user_id: i64) -> i64 {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM wallet_transactions WHERE player_id=?1",
+                [user_id],
+                |row| row.get(0),
+            )
+            .expect("transaction count")
+    }
+
+    #[test]
+    fn credit_and_debit_conserve_balance() {
+        let mut connection = memory_database();
+        let final_balance = {
+            let transaction = transaction_of(&mut connection);
+            assert_eq!(balance(&transaction, 10001, "coins").expect("balance"), 0);
+            credit(&transaction, 10001, "coins", 100, "test", "k1").expect("credit");
+            credit(&transaction, 10001, "coins", 50, "test", "k2").expect("credit");
+            debit(&transaction, 10001, "coins", 30, "test", "k3").expect("debit");
+            let result = balance(&transaction, 10001, "coins").expect("balance");
+            transaction.commit().expect("commit");
+            result
+        };
+
+        assert_eq!(final_balance, 120);
+        let verify = transaction_of(&mut connection);
+        assert_eq!(count_transactions(&verify, 10001), 3);
+        verify.commit().expect("commit");
+    }
+
+    #[test]
+    fn idempotency_key_never_pays_twice() {
+        let mut connection = memory_database();
+        let first = {
+            let transaction = transaction_of(&mut connection);
+            let first = credit(&transaction, 10001, "coins", 100, "test", "same-key")
+                .expect("first credit");
+            let replay = credit(&transaction, 10001, "coins", 100, "test", "same-key")
+                .expect("replayed credit");
+            assert_eq!(first.transaction_id, replay.transaction_id);
+            assert_eq!(first.balance_after, replay.balance_after);
+            transaction.commit().expect("commit");
+            first
+        };
+
+        assert_eq!(first.balance_after, 100);
+        let verify = transaction_of(&mut connection);
+        assert_eq!(balance(&verify, 10001, "coins").expect("balance"), 100);
+        assert_eq!(count_transactions(&verify, 10001), 1);
+        verify.commit().expect("commit");
+    }
+
+    #[test]
+    fn overdraw_is_rejected_without_partial_write() {
+        let mut connection = memory_database();
+        let error = {
+            let transaction = transaction_of(&mut connection);
+            credit(&transaction, 10001, "coins", 50, "test", "seed").expect("credit");
+            let error =
+                debit(&transaction, 10001, "coins", 100, "test", "over").expect_err("overdraw");
+            let balance_after_failure = balance(&transaction, 10001, "coins").expect("balance");
+            transaction.commit().expect("commit");
+            assert_eq!(balance_after_failure, 50);
+            error
+        };
+
+        assert!(matches!(
+            error,
+            crate::database::DatabaseError::InsufficientBalance
+        ));
+        let verify = transaction_of(&mut connection);
+        assert_eq!(balance(&verify, 10001, "coins").expect("balance"), 50);
+        assert_eq!(count_transactions(&verify, 10001), 1);
+        verify.commit().expect("commit");
+    }
+}

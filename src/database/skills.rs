@@ -411,3 +411,113 @@ fn tactic(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult<Tactic>
         .unwrap_or_else(|| "balanced".into());
     Tactic::from_code(&code).ok_or_else(|| DatabaseError::InvalidData(format!("未知战术：{code}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{configure, ensure_unlocked, list, loadout, set_tactic, train};
+    use crate::combat::Tactic;
+    use crate::database::DatabaseError;
+    use crate::database::migrations;
+    use rusqlite::Connection;
+
+    fn memory_database() -> Connection {
+        let mut connection = Connection::open_in_memory().expect("open in-memory database");
+        migrations::apply(&mut connection).expect("apply migrations");
+        connection
+            .execute(
+                "INSERT INTO players(player_id, created_at, updated_at) VALUES(10001, 0, 0)",
+                [],
+            )
+            .expect("insert player");
+        connection
+            .execute(
+                "INSERT INTO player_cultivation(player_id, system_id, realm_index, updated_at)
+                 VALUES(10001, 'sword', 3, 0)",
+                [],
+            )
+            .expect("insert cultivation");
+        connection
+    }
+
+    #[test]
+    fn configure_enforces_ownership_capacity_and_uniqueness() {
+        let mut connection = memory_database();
+        let transaction = connection.transaction().expect("begin transaction");
+        ensure_unlocked(&transaction, 10001, "sword", 3).expect("unlock skills");
+        let owned = list(&transaction, 10001).expect("skill list");
+        let skill_id = owned[0].definition.id.as_str().to_owned();
+
+        configure(&transaction, 10001, 3, "active", 0, &skill_id).expect("first configure");
+        // 同一技能重复配置是合法的“移动”语义：先删除旧槽位，再写入新槽位。
+        configure(&transaction, 10001, 3, "active", 1, &skill_id).expect("relocate");
+        let loadout_rows: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM player_skill_loadouts
+                 WHERE player_id=10001 AND skill_id=?1",
+                [&skill_id],
+                |row| row.get(0),
+            )
+            .expect("loadout rows");
+        assert_eq!(loadout_rows, 1, "同一技能只能占据一个配置槽位");
+
+        transaction
+            .execute(
+                "DELETE FROM player_skills WHERE player_id=10001 AND skill_id=?1",
+                [&skill_id],
+            )
+            .expect("revoke skill");
+        let unowned =
+            configure(&transaction, 10001, 3, "active", 1, &skill_id).expect_err("unowned skill");
+        assert!(matches!(unowned, DatabaseError::InvalidData(_)));
+
+        let unknown_slot =
+            configure(&transaction, 10001, 0, "active", 50, &skill_id).expect_err("locked slot");
+        assert!(matches!(unknown_slot, DatabaseError::InvalidData(_)));
+        let bad_type = configure(&transaction, 10001, 3, "ultimate", 0, &skill_id)
+            .expect_err("unknown slot type");
+        assert!(matches!(bad_type, DatabaseError::InvalidData(_)));
+        transaction.commit().expect("commit");
+
+        let verify = connection.transaction().expect("begin transaction");
+        let loadout = loadout(&verify, 10001, "sword", 3).expect("loadout");
+        let occurrences = loadout
+            .active
+            .iter()
+            .filter(|skill| skill.id.as_str() == skill_id)
+            .count();
+        assert_eq!(occurrences, 1, "目标技能只出现在移动后的槽位");
+    }
+
+    #[test]
+    fn train_caps_mastery_at_three_and_tactic_persists() {
+        let mut connection = memory_database();
+        let transaction = connection.transaction().expect("begin transaction");
+        ensure_unlocked(&transaction, 10001, "sword", 3).expect("unlock skills");
+        let owned = list(&transaction, 10001).expect("skill list");
+        let skill_id = owned[0].definition.id.as_str().to_owned();
+
+        let first = train(&transaction, 10001, &skill_id).expect("first train");
+        let second = train(&transaction, 10001, &skill_id).expect("second train");
+        let third = train(&transaction, 10001, &skill_id).expect("third train");
+        let fourth = train(&transaction, 10001, &skill_id).expect("capped train");
+        let unknown = train(&transaction, 10001, "sword.does_not_exist").expect_err("unknown");
+        assert!(matches!(unknown, DatabaseError::NotFound));
+
+        set_tactic(&transaction, 10001, Tactic::Aggressive).expect("set tactic");
+        transaction.commit().expect("commit");
+
+        assert_eq!((first, second, third), (1, 2, 3));
+        assert_eq!(fourth, 3, "熟练度到顶后重复研习保持 3");
+
+        let verify = connection.transaction().expect("begin transaction");
+        let loadout = loadout(&verify, 10001, "sword", 3).expect("loadout");
+        assert_eq!(loadout.tactic, Tactic::Aggressive);
+        let mastery = list(&verify, 10001)
+            .expect("list")
+            .into_iter()
+            .find(|skill| skill.definition.id.as_str() == skill_id)
+            .expect("trained skill")
+            .mastery;
+        assert_eq!(mastery, 3);
+    }
+}

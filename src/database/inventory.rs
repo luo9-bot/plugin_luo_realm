@@ -207,3 +207,77 @@ fn modifiers(transaction: &Transaction<'_>, item_id: i64) -> DatabaseResult<Vec<
         .collect::<Result<Vec<_>, _>>()
         .map_err(DatabaseError::from_sqlite)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{add_item, equip, equipped, list, unequip};
+    use crate::combat::EquipmentSlot;
+    use crate::database::DatabaseError;
+    use crate::database::migrations;
+    use rusqlite::Connection;
+
+    fn memory_database() -> Connection {
+        let mut connection = Connection::open_in_memory().expect("open in-memory database");
+        migrations::apply(&mut connection).expect("apply migrations");
+        for player in [10001, 10002] {
+            connection
+                .execute(
+                    "INSERT INTO players(player_id, created_at, updated_at) VALUES(?1, 0, 0)",
+                    [player],
+                )
+                .expect("insert player");
+        }
+        connection
+    }
+
+    fn transaction_of(connection: &mut Connection) -> rusqlite::Transaction<'_> {
+        connection.transaction().expect("begin transaction")
+    }
+
+    #[test]
+    fn equip_and_unequip_round_trip_within_one_transaction() {
+        let mut connection = memory_database();
+        let transaction = transaction_of(&mut connection);
+        let item_id = add_item(&transaction, 10001, "iron_sword", 1, 0).expect("add item");
+        equip(&transaction, 10001, item_id, EquipmentSlot::MainHand).expect("equip");
+        let equipped_items = equipped(&transaction, 10001).expect("equipped");
+        let removed = unequip(&transaction, 10001, EquipmentSlot::MainHand).expect("unequip");
+        transaction.commit().expect("commit");
+
+        assert_eq!(equipped_items.len(), 1);
+        assert_eq!(equipped_items[0].item_id, item_id);
+        assert_eq!(equipped_items[0].slot, EquipmentSlot::MainHand);
+        assert!(removed);
+
+        let verify = transaction_of(&mut connection);
+        let items = list(&verify, 10001).expect("list");
+        verify.commit().expect("commit");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].equipped_slot, None);
+    }
+
+    #[test]
+    fn equip_rejects_foreign_items_and_mismatched_slots() {
+        let mut connection = memory_database();
+        let transaction = transaction_of(&mut connection);
+        let own = add_item(&transaction, 10001, "iron_sword", 1, 0).expect("own item");
+        let foreign = add_item(&transaction, 10002, "iron_sword", 1, 0).expect("foreign item");
+        let herb = add_item(&transaction, 10001, "herb_bundle", 1, 1).expect("non-equipment");
+
+        let foreign_error =
+            equip(&transaction, 10001, foreign, EquipmentSlot::MainHand).expect_err("foreign");
+        assert!(matches!(foreign_error, DatabaseError::NotFound));
+        let herb_error =
+            equip(&transaction, 10001, herb, EquipmentSlot::MainHand).expect_err("non-equipment");
+        assert!(matches!(herb_error, DatabaseError::InvalidData(_)));
+        let slot_error = equip(&transaction, 10001, own, EquipmentSlot::Body).expect_err("slot");
+        assert!(matches!(slot_error, DatabaseError::InvalidData(_)));
+        equip(&transaction, 10001, own, EquipmentSlot::MainHand).expect("valid equip");
+        transaction.commit().expect("commit");
+
+        let verify = transaction_of(&mut connection);
+        let items = list(&verify, 10001).expect("list");
+        verify.commit().expect("commit");
+        assert_eq!(items[0].equipped_slot.as_deref(), Some("main_hand"));
+    }
+}

@@ -84,3 +84,86 @@ pub fn redeem(
         remaining_today: daily_limit.saturating_sub(redeemed_today + 1),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{RedemptionResult, redeem};
+    use crate::database::migrations;
+    use crate::game::VerifiedVoucher;
+    use rusqlite::Connection;
+
+    fn memory_database() -> Connection {
+        let mut connection = Connection::open_in_memory().expect("open in-memory database");
+        migrations::apply(&mut connection).expect("apply migrations");
+        connection
+            .execute(
+                "INSERT INTO players(player_id, created_at, updated_at) VALUES(10001, 0, 0)",
+                [],
+            )
+            .expect("insert player");
+        connection
+    }
+
+    fn voucher(nonce: &str, reward: i64) -> VerifiedVoucher {
+        VerifiedVoucher {
+            nonce: nonce.into(),
+            player_id: 10001,
+            game_id: "ascii-fpv".into(),
+            score: 1_200,
+            reward,
+            issued_at: 0,
+        }
+    }
+
+    #[test]
+    fn redeem_is_idempotent_per_nonce_and_capped_per_day() {
+        let mut connection = memory_database();
+        let transaction = connection.transaction().expect("begin transaction");
+
+        let first =
+            redeem(&transaction, &voucher("n1", 50), "2026-09-03", 2).expect("first redeem");
+        let replay =
+            redeem(&transaction, &voucher("n1", 50), "2026-09-03", 2).expect("replayed redeem");
+        let second =
+            redeem(&transaction, &voucher("n2", 30), "2026-09-03", 2).expect("second redeem");
+        let third =
+            redeem(&transaction, &voucher("n3", 30), "2026-09-03", 2).expect("third redeem");
+        transaction.commit().expect("commit");
+
+        let RedemptionResult::Redeemed {
+            balance_after,
+            remaining_today,
+            ..
+        } = first
+        else {
+            panic!("first redeem should succeed");
+        };
+        assert_eq!((balance_after, remaining_today), (50, 1));
+        assert!(matches!(replay, RedemptionResult::AlreadyRedeemed));
+        let RedemptionResult::Redeemed {
+            balance_after: after_second,
+            remaining_today: zero,
+            ..
+        } = second
+        else {
+            panic!("second redeem should succeed");
+        };
+        assert_eq!((after_second, zero), (80, 0));
+        assert!(matches!(third, RedemptionResult::DailyLimitReached));
+
+        let balance: i64 = connection
+            .query_row(
+                "SELECT amount FROM player_balances WHERE player_id=10001 AND currency_code='coins'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("balance");
+        assert_eq!(balance, 80);
+        let redemptions: i64 = connection
+            .query_row("SELECT COUNT(*) FROM game_voucher_redemptions", [], |row| {
+                row.get(0)
+            })
+            .expect("redemption count");
+        assert_eq!(redemptions, 2);
+    }
+}
