@@ -64,9 +64,12 @@ pub struct StatisticRow {
     pub metric_value: i64,
 }
 
+/// 角色当前的基础战斗属性（由境界索引推导）。
 #[derive(Debug, Serialize)]
 pub struct PlayerDetail {
     pub player: PlayerRow,
+    /// 已入道的玩家才有境界与属性；待选体系玩家为空。
+    pub attributes: Option<crate::database::player::RealmAttributes>,
     pub items: Vec<ItemRow>,
     pub statistics: Vec<StatisticRow>,
 }
@@ -239,8 +242,13 @@ pub fn player_detail(connection: &Connection, user_id: u64) -> DatabaseResult<Pl
 
     let items = query_items(connection, id)?;
     let statistics = query_statistics(connection, id)?;
+    let attributes = player
+        .realm_index
+        .and_then(|realm_index| u32::try_from(realm_index).ok())
+        .map(crate::database::player::realm_attributes);
     Ok(PlayerDetail {
         player,
+        attributes,
         items,
         statistics,
     })

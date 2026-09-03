@@ -97,8 +97,7 @@ tbody tr:hover { background: #fafcfb; }
 .row-title { font-weight: 650; }
 .row-subtitle { display: block; color: var(--muted); font-size: 11px; }
 
-.master-detail { display: grid; grid-template-columns: minmax(420px, 42%) minmax(480px, 1fr); gap: 18px; align-items: start; }
-.master-pane, .detail-pane { min-width: 0; border: 1px solid var(--line); background: var(--surface); }
+.detail-pane { min-width: 0; border: 1px solid var(--line); background: var(--surface); }
 .detail-pane { padding: 20px; }
 .empty-state { min-height: 240px; display: grid; place-items: center; color: var(--muted); }
 .tabs { display: flex; overflow-x: auto; margin: 16px -20px 18px; padding: 0 20px; border-bottom: 1px solid var(--line); }
@@ -108,6 +107,38 @@ tbody tr:hover { background: #fafcfb; }
 .tab-body.active { display: block; }
 .tab-body > * + * { margin-top: 12px; }
 .danger-zone { border-left: 3px solid var(--danger); }
+
+.avatar-badge { display: grid; place-items: center; width: 40px; height: 40px; flex: 0 0 auto; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.avatar-badge.large { width: 56px; height: 56px; font-size: 22px; }
+.player-identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pill { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; background: var(--surface-subtle); color: var(--muted); font-size: 12px; white-space: nowrap; }
+.pill-ok { background: var(--accent-soft); color: var(--accent); }
+.pill-warn { background: #fdf3e0; color: var(--warning); }
+.pill-off { background: var(--danger-soft); color: var(--danger); }
+.detail-panel { margin-top: 18px; padding: 22px; border: 1px solid var(--line); background: var(--surface); }
+.detail-heading { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+.detail-heading .player-identity { flex: 1; min-width: 0; }
+.detail-heading h2 { margin: 0; }
+.profile-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 22px; align-items: start; }
+.danger-card { display: grid; gap: 10px; justify-items: start; padding: 18px; border: 1px solid #f0c9c4; border-radius: 6px; background: var(--danger-soft); }
+.danger-card .danger-title { margin: 0; color: var(--danger); }
+.danger-card p { margin: 0; }
+.attribute-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.attribute { padding: 12px 14px; border: 1px solid var(--line); background: var(--surface-subtle); }
+.attribute strong { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.attribute span { color: var(--muted); font-size: 12px; }
+.skill-workspace { display: grid; grid-template-columns: 240px 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+.pane { min-width: 0; border: 1px solid var(--line); background: var(--surface); }
+.pane-title { padding: 12px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 600; }
+.pane-toolbar { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.skill-system-list, .skill-rows { display: grid; gap: 4px; max-height: 640px; overflow: auto; padding: 6px; }
+.skill-system-row, .skill-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; text-align: left; }
+.skill-system-row:hover, .skill-row:hover { background: var(--surface-subtle); }
+.skill-system-row.active, .skill-row.active { border-color: var(--accent); background: var(--accent-soft); }
+.system-swatch { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--accent); font-weight: 700; }
+.system-name, .skill-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.skill-actions { align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.skill-actions .spacer { flex: 1; }
 
 .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
 .asset-card { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
@@ -157,7 +188,9 @@ dialog form { padding: 20px; }
     .stats-grid { grid-template-columns: repeat(3, 1fr); }
     .stat:nth-child(3) { border-right: 0; }
     .stat:nth-child(-n + 3) { border-bottom: 1px solid var(--line); }
-    .master-detail { grid-template-columns: 1fr; }
+    .skill-workspace { grid-template-columns: 1fr; }
+    .profile-layout { grid-template-columns: 1fr; }
+    .attribute-row { grid-template-columns: repeat(3, 1fr); }
 }
 
 @media (max-width: 760px) {

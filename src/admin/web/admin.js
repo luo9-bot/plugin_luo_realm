@@ -5,9 +5,32 @@ const state = {
     token: sessionStorage.getItem('lr_admin_token') || '',
     config: null,
     player: null,
+    playerPage: 1,
+    skills: [],
+    skillFilter: '',
+    cultivationSystems: null,
     assetPage: 1,
     assetUrls: [],
 };
+
+function avatarBadge(name, className = 'avatar-badge') {
+    return element('span', className, [...(name || '?').trim()][0] || '?');
+}
+
+function statusPill(status, registrationState) {
+    if (registrationState === 'pending_system') return element('span', 'pill pill-warn', '待选体系');
+    const labels = { active: '正常', disabled: '停用', deleted: '已删除' };
+    return element('span', `pill ${status === 'active' ? 'pill-ok' : 'pill-off'}`, labels[status] || status);
+}
+
+function renderPagination(containerId, page, pages, loader) {
+    const root = byId(containerId);
+    const controls = [];
+    if (page > 1) controls.push(makeButton('上一页', () => loader(page - 1)));
+    controls.push(element('span', 'counter', `${page} / ${pages}`));
+    if (page < pages) controls.push(makeButton('下一页', () => loader(page + 1)));
+    root.replaceChildren(...controls);
+}
 
 function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -106,6 +129,9 @@ const SYSTEM_OPTIONS = [
     ['soul', '灵修'], ['qi', '气修'], ['blood_demon', '血魔邪修'], ['formation', '阵修'],
     ['alchemy_artifact', '丹器修'], ['summoner', '召唤流'], ['music', '音修'],
 ];
+
+const SYSTEM_NAMES = Object.fromEntries(SYSTEM_OPTIONS);
+const systemName = id => SYSTEM_NAMES[id] || id || '—';
 
 const SKILL_CATEGORIES = { active: '主动', passive: '被动', domain: '领域' };
 const TARGET_RULES = { self_target: '自身', single_enemy: '单一敌人', all_enemies: '全体敌人', lowest_health_ally: '最弱队友' };
@@ -359,41 +385,61 @@ async function addGroup() {
     } catch (error) { notify(error.message, true); }
 }
 
-async function loadPlayers() {
+async function loadPlayers(page = 1) {
+    state.playerPage = page;
     const search = encodeURIComponent(byId('playerSearch').value.trim());
-    const data = await api(`/api/players?search=${search}`);
+    const data = await api(`/api/players?search=${search}&page=${page}&limit=25`);
     byId('playerTotal').textContent = `${data.total} 名玩家`;
     const rows = data.items.map(player => {
         const row = document.createElement('tr');
         const identity = tableCell(row, '');
-        identity.append(element('span', 'row-title', player.display_name), element('span', 'row-subtitle', player.player_id));
-        tableCell(row, player.registration_state === 'pending_system' ? '待选体系' : `${player.system_id} · ${Number(player.realm_index) + 1}`);
-        tableCell(row, '').appendChild(makeButton('管理', () => loadPlayer(player.player_id)));
+        const identityWrap = element('div', 'player-identity');
+        const names = element('div');
+        names.append(element('span', 'row-title', player.display_name), element('span', 'row-subtitle', player.player_id));
+        identityWrap.append(avatarBadge(player.display_name), names);
+        identity.appendChild(identityWrap);
+        tableCell(row, player.realm_index === null || player.realm_index === undefined
+            ? '待选体系'
+            : `${systemName(player.system_id)} · ${Number(player.realm_index) + 1}`);
+        tableCell(row, player.coins);
+        tableCell(row, player.marks);
+        tableCell(row, '').appendChild(statusPill(player.status, player.registration_state));
+        tableCell(row, '').appendChild(makeButton('管理', () => loadPlayer(player.player_id), 'button'));
         return row;
     });
     byId('playerRows').replaceChildren(...rows);
+    renderPagination('playerPagination', data.page, Math.max(1, Math.ceil(data.total / data.limit)), loadPlayers);
 }
 
 async function loadPlayer(playerId) {
     try {
         state.player = await api(`/api/players/${playerId}`);
-        renderPlayer(state.player);
+        await renderPlayer(state.player);
     } catch (error) { notify(error.message, true); }
 }
 
-function renderPlayer(data) {
+async function renderPlayer(data) {
     const root = byId('playerDetail');
-    root.classList.remove('empty-state');
+    root.classList.remove('hidden');
     root.replaceChildren();
-    const heading = element('div', 'page-heading');
-    const name = element('div');
-    name.append(element('h2', '', data.player.display_name), element('span', 'muted', `QQ ${data.player.player_id}`));
-    heading.append(name, element('span', 'counter', data.player.registration_state === 'active' ? '完整角色' : '待选体系'));
-    root.appendChild(heading);
+    const heading = element('div', 'detail-heading');
+    const identity = element('div', 'player-identity');
+    const names = element('div');
+    names.append(element('h2', '', data.player.display_name), element('span', 'muted', `QQ ${data.player.player_id}`));
+    identity.append(avatarBadge(data.player.display_name, 'avatar-badge large'), names);
+    heading.append(
+        identity,
+        statusPill(data.player.status, data.player.registration_state),
+        makeButton('收起', () => {
+            state.player = null;
+            root.classList.add('hidden');
+            root.replaceChildren();
+        }),
+    );
 
     const tabs = element('div', 'tabs');
     const bodies = element('div');
-    [['资料', 'profile'], ['钱包', 'wallet'], ['修行', 'cultivation'], ['物品', 'items'], ['统计', 'statistics']].forEach(([label, key], index) => {
+    [['资料', 'profile'], ['角色', 'character'], ['钱包', 'wallet'], ['物品', 'items'], ['统计', 'statistics']].forEach(([label, key], index) => {
         const tab = makeButton(label, () => selectPlayerTab(key), '');
         tab.dataset.tab = key;
         tab.classList.toggle('active', index === 0);
@@ -402,10 +448,10 @@ function renderPlayer(data) {
         body.id = `player-${key}`;
         bodies.appendChild(body);
     });
-    root.append(tabs, bodies);
+    root.append(heading, tabs, bodies);
     renderProfile(data);
+    await renderCharacter(data);
     renderWallet(data);
-    renderCultivation(data);
     renderItems(data);
     renderStatistics(data);
 }
@@ -427,11 +473,32 @@ function renderProfile(data) {
         status.appendChild(option);
     });
     statusLabel.append(element('span', '', '状态'), status);
-    root.append(inputField('显示名称', 'editName', data.player.display_name), statusLabel);
-    root.appendChild(makeButton('保存资料', () => saveProfile(data.player.player_id), 'button primary'));
-    const danger = element('div', 'band danger-zone');
-    danger.append(element('h2', '', '永久删除玩家'), makeButton('删除玩家及关联数据', () => deletePlayer(data.player.player_id), 'button danger'));
-    root.appendChild(danger);
+    const form = gridOf(
+        inputField('显示名称', 'editName', data.player.display_name),
+        statusLabel,
+        inputField('账号 ID', 'profileAccountId', data.player.player_id),
+        inputField('修行进度', 'profileProgressReadonly', data.player.progress ?? 0, 'number'),
+    );
+    ['profileAccountId', 'profileProgressReadonly'].forEach(id => { byIdSoon(id, input => input.readOnly = true); });
+    const left = element('div');
+    left.append(form, makeButton('保存资料', () => saveProfile(data.player.player_id), 'button primary'));
+    const danger = element('div', 'danger-card');
+    danger.append(
+        element('h2', 'danger-title', '永久删除玩家'),
+        element('p', 'muted', '删除玩家及关联数据，且无法恢复。'),
+        makeButton('删除玩家及关联数据', () => deletePlayer(data.player.player_id), 'button danger'),
+    );
+    const layout = element('div', 'profile-layout');
+    layout.append(left, danger);
+    root.replaceChildren(layout);
+}
+
+/// tab 内容是同步构建后插入 DOM 的；对个别新节点做补丁时用它排队执行。
+function byIdSoon(id, patch) {
+    requestAnimationFrame(() => {
+        const node = byId(id);
+        if (node) patch(node);
+    });
 }
 
 async function saveProfile(playerId) {
@@ -454,9 +521,10 @@ async function deletePlayer(playerId) {
         await api(`/api/players/${playerId}`, { method: 'DELETE', body: JSON.stringify(action) });
         notify('玩家已永久删除');
         state.player = null;
-        byId('playerDetail').className = 'detail-pane empty-state';
-        byId('playerDetail').textContent = '选择一名玩家';
-        await loadPlayers();
+        const detail = byId('playerDetail');
+        detail.classList.add('hidden');
+        detail.replaceChildren();
+        await loadPlayers(state.playerPage);
     } catch (error) { notify(error.message, true); }
 }
 
@@ -492,14 +560,67 @@ async function saveWallet(playerId) {
     } catch (error) { notify(error.message, true); }
 }
 
-function renderCultivation(data) {
-    const root = byId('player-cultivation');
-    root.append(
-        hintField('体系标识', 'cultSystem', data.player.system_id || '', SYSTEM_OPTIONS.map(([value]) => value)),
-        numberInput('境界索引（0 起）', 'cultRealm', data.player.realm_index ?? 0),
-        numberInput('修行进度', 'cultProgress', data.player.progress ?? 0),
+async function loadCultivationSystems() {
+    if (!state.cultivationSystems) state.cultivationSystems = await api('/api/definitions/cultivation');
+    return state.cultivationSystems;
+}
+
+/// 角色快速配置：体系与境界均为下拉选择，属性由境界唯一决定。
+async function renderCharacter(data) {
+    const root = byId('player-character');
+    const systems = await loadCultivationSystems();
+    const player = data.player;
+    const pending = player.realm_index === null || player.realm_index === undefined;
+
+    if (data.attributes) {
+        const preview = element('div', 'attribute-row');
+        [
+            ['等级', data.attributes.level],
+            ['生命', data.attributes.base_hp],
+            ['攻击', data.attributes.base_attack],
+            ['防御', data.attributes.base_defense],
+            ['速度', data.attributes.speed],
+        ].forEach(([label, value]) => {
+            const card = element('div', 'attribute');
+            card.append(element('strong', '', value), element('span', '', label));
+            preview.appendChild(card);
+        });
+        root.append(element('h2', '', '当前属性'), preview);
+    } else {
+        root.append(element('p', 'muted', '该玩家尚未选择体系，配置后成为完整角色。'));
+    }
+
+    const systemSelect = pairsSelect(
+        '修行体系',
+        'cultSystem',
+        systems.map(system => [system.id, `${system.name} (${system.id})`]),
+        player.system_id || systems[0]?.id || '',
     );
-    root.appendChild(makeButton('保存修行状态', () => saveCultivation(data.player.player_id), 'button primary'));
+    const realmSelect = pairsSelect('境界', 'cultRealm', [], player.realm_index ?? 0);
+    const syncRealms = () => {
+        const system = systems.find(item => item.id === systemSelect.querySelector('select').value);
+        const select = realmSelect.querySelector('select');
+        select.replaceChildren(...(system?.realms ?? []).map((realm, index) => {
+            const option = element('option', '', `${index + 1} · ${realm.name}`);
+            option.value = String(index);
+            return option;
+        }));
+        select.value = String(pending ? 0 : player.realm_index);
+        if (select.selectedIndex < 0) select.selectedIndex = 0;
+    };
+    systemSelect.querySelector('select').addEventListener('change', syncRealms);
+    syncRealms();
+
+    root.append(
+        element('h2', '', '快速配置'),
+        gridOf(
+            systemSelect,
+            realmSelect,
+            numberInput('修行进度', 'cultProgress', player.progress ?? 0),
+        ),
+        makeButton('保存角色配置', () => saveCultivation(player.player_id), 'button primary'),
+        element('p', 'muted', '生命、攻击、防御与速度由境界唯一决定，调整境界即调整全部属性。'),
+    );
 }
 
 async function saveCultivation(playerId) {
@@ -676,17 +797,58 @@ async function loadAssets(page = 1) {
 }
 
 async function loadSkills() {
-    const data = await api('/api/skills');
-    const rows = data.map((item, index) => {
-        const row = document.createElement('tr');
-        tableCell(row, item.definition.name);
-        tableCell(row, item.definition.system_id);
-        tableCell(row, item.enabled ? '启用' : '停用');
-        tableCell(row, '').appendChild(makeButton('编辑', () => editSkill(item), 'button'));
+    state.skills = await api('/api/skills');
+    renderSkillSystems();
+    renderSkillList();
+    if (state.skills.length && !state.skill) editSkill(visibleSkills()[0]);
+}
+
+function visibleSkills() {
+    const keyword = byId('skillSearch').value.trim();
+    return state.skills.filter(item =>
+        (!state.skillFilter || item.definition.system_id === state.skillFilter)
+        && (!keyword || item.definition.name.includes(keyword) || item.definition.id.includes(keyword)));
+}
+
+function renderSkillSystems() {
+    const counts = new Map();
+    state.skills.forEach(item => {
+        counts.set(item.definition.system_id, (counts.get(item.definition.system_id) || 0) + 1);
+    });
+    const entries = [['', '全部体系', state.skills.length],
+        ...[...counts.entries()].map(([id, count]) => [id, systemName(id), count])];
+    byId('skillSystemList').replaceChildren(...entries.map(([id, label, count]) => {
+        const row = element('button', `skill-system-row${state.skillFilter === id ? ' active' : ''}`);
+        row.type = 'button';
+        row.append(
+            element('span', 'system-swatch', label.slice(0, 1)),
+            element('span', 'system-name', label),
+            element('span', 'counter', count),
+        );
+        row.addEventListener('click', () => {
+            state.skillFilter = id;
+            renderSkillSystems();
+            renderSkillList();
+        });
+        return row;
+    }));
+}
+
+function renderSkillList() {
+    const rows = visibleSkills().map(item => {
+        const row = element('button', `skill-row${state.skill?.definition.id === item.definition.id ? ' active' : ''}`);
+        row.type = 'button';
+        row.append(
+            element('span', 'skill-name', item.definition.name),
+            element('span', `pill ${item.enabled ? 'pill-ok' : 'pill-off'}`, item.enabled ? '启用' : '停用'),
+        );
+        row.addEventListener('click', () => {
+            editSkill(item);
+            renderSkillList();
+        });
         return row;
     });
-    byId('skillRows').replaceChildren(...rows);
-    if (data.length && !state.skill) editSkill(data[0]);
+    byId('skillRows').replaceChildren(...(rows.length ? rows : [element('p', 'muted', '没有匹配的技能')]));
 }
 
 function editSkill(item) {
@@ -695,6 +857,21 @@ function editSkill(item) {
     const definition = item.definition;
     const form = byId('skillEditor');
     form.className = 'detail-pane form-layout';
+
+    const tabs = element('div', 'tabs');
+    const bodies = element('div');
+    const basicBody = element('div', 'tab-body active');
+    const effectsBody = element('div', 'tab-body');
+    const visualBody = element('div', 'tab-body');
+    [['基础设置', basicBody], ['效果配置', effectsBody], ['战斗表现', visualBody]].forEach(([label, body], index) => {
+        const key = ['basic', 'effects', 'visual'][index];
+        body.id = `skill-${key}`;
+        const tab = makeButton(label, () => selectSkillTab(key), '');
+        tab.dataset.tab = key;
+        tab.classList.toggle('active', index === 0);
+        tabs.appendChild(tab);
+        bodies.appendChild(body);
+    });
 
     const effectList = element('div', 'effect-list');
     effectList.id = 'effectList';
@@ -713,28 +890,7 @@ function editSkill(item) {
     });
 
     const visual = item.visual;
-    const visualDetails = document.createElement('details');
-    visualDetails.append(
-        element('summary', '', '战斗表现（颜色 / 弹道 / 素材名）'),
-        gridOf(
-            colorInput('主色', 'visualPrimary', visual.primary_color),
-            colorInput('副色', 'visualSecondary', visual.secondary_color),
-            colorInput('闪光色', 'visualFlash', visual.flash_color),
-            inputField('图标素材名（留空用默认）', 'visualIcon', visual.icon_asset ?? ''),
-            inputField('特效素材名（留空用默认）', 'visualEffectAsset', visual.effect_asset ?? ''),
-            inputField('弹道样式', 'visualArcStyle', visual.arc_style),
-            numberInput('弹道宽度', 'visualArcWidth', visual.arc_width),
-            numberInput('弹道时长', 'visualArcDuration', visual.arc_duration),
-        ),
-    );
-
-    const skillActions = element('div', 'form-actions');
-    skillActions.append(
-        makeButton('保存技能', saveSkill, 'button primary'),
-        makeButton('删除自定义配置', deleteSkill, 'button danger'),
-    );
-    form.replaceChildren(
-        element('h2', '', `${definition.name} · ${definition.id}`),
+    basicBody.replaceChildren(
         element('h2', '', '基础参数'),
         gridOf(
             inputField('技能名称', 'skillName', definition.name),
@@ -752,14 +908,47 @@ function editSkill(item) {
         ),
         element('h2', '', '标签'),
         tagChecks(definition.tags || []),
+    );
+    effectsBody.replaceChildren(
         element('h2', '', '效果序列（从上到下依次结算）'),
         addSelect,
         effectList,
-        visualDetails,
+    );
+    visualBody.replaceChildren(
+        gridOf(
+            colorInput('主色', 'visualPrimary', visual.primary_color),
+            colorInput('副色', 'visualSecondary', visual.secondary_color),
+            colorInput('闪光色', 'visualFlash', visual.flash_color),
+            inputField('图标素材名（留空用默认）', 'visualIcon', visual.icon_asset ?? ''),
+            inputField('特效素材名（留空用默认）', 'visualEffectAsset', visual.effect_asset ?? ''),
+            inputField('弹道样式', 'visualArcStyle', visual.arc_style),
+            numberInput('弹道宽度', 'visualArcWidth', visual.arc_width),
+            numberInput('弹道时长', 'visualArcDuration', visual.arc_duration),
+        ),
+    );
+
+    const skillActions = element('div', 'form-actions skill-actions');
+    skillActions.append(
         checkInput('启用该技能', 'skillEnabled', item.enabled),
+        element('span', 'spacer'),
+        makeButton('保存技能', saveSkill, 'button primary'),
+        makeButton('删除自定义配置', deleteSkill, 'button danger'),
+    );
+    form.replaceChildren(
+        element('div', 'detail-heading',
+            element('h2', '', `${definition.name} · ${definition.id}`),
+            element('span', `pill ${item.enabled ? 'pill-ok' : 'pill-off'}`, item.enabled ? '启用中' : '已停用'),
+        ),
+        tabs,
+        bodies,
         skillActions,
     );
     renderEffectList();
+}
+
+function selectSkillTab(key) {
+    document.querySelectorAll('#skillEditor [data-tab]').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === key));
+    document.querySelectorAll('#skillEditor .tab-body').forEach(body => body.classList.toggle('active', body.id === `skill-${key}`));
 }
 
 function tagChecks(tags) {
@@ -893,12 +1082,7 @@ async function loadAssetPreview(path, root) {
 }
 
 function renderAssetPagination(data) {
-    const pages = Math.ceil(data.total / data.limit);
-    const controls = [];
-    if (data.page > 1) controls.push(makeButton('上一页', () => loadAssets(data.page - 1)));
-    controls.push(element('span', 'counter', `${data.page} / ${Math.max(1, pages)}`));
-    if (data.page < pages) controls.push(makeButton('下一页', () => loadAssets(data.page + 1)));
-    byId('assetPagination').replaceChildren(...controls);
+    renderPagination('assetPagination', data.page, Math.max(1, Math.ceil(data.total / data.limit)), loadAssets);
 }
 
 function formatBytes(bytes) {
@@ -985,13 +1169,22 @@ async function loadSettings() {
     byId('prefixEnabled').value = String(state.config.command.prefix_enabled);
     byId('prefix').value = state.config.command.prefix;
     byId('battleReportEnabled').value = String(state.config.gameplay.battle_report_enabled);
+    byId('adminEnabled').value = String(state.config.admin.enabled);
+    byId('bind').value = state.config.admin.bind;
+    byId('port').value = state.config.admin.port;
     byId('asciiFpvEnabled').value = String(state.config.game.ascii_fpv_enabled);
     byId('asciiFpvDomain').value = state.config.game.ascii_fpv_domain;
     byId('rewardPublicKey').value = state.config.game.reward_public_key;
     byId('dailyRedemptionLimit').value = state.config.game.daily_redemption_limit;
     byId('adminIds').value = state.config.admin.admin_ids.join('\n');
-    byId('bind').value = state.config.admin.bind;
-    byId('port').value = state.config.admin.port;
+    const playerWeb = state.config.player_web;
+    byId('playerWebEnabled').value = String(playerWeb.enabled);
+    byId('playerWebBaseUrl').value = playerWeb.base_url;
+    byId('playerWebOrigins').value = playerWeb.allowed_origins.join('\n');
+    byId('ticketTtl').value = playerWeb.ticket_ttl_minutes;
+    byId('sessionTtl').value = playerWeb.session_ttl_minutes;
+    byId('syncUrl').value = playerWeb.sync_url;
+    byId('syncToken').value = playerWeb.sync_token;
     const systems = await api('/api/definitions/cultivation');
     byId('systems').replaceChildren(...systems.map(system => {
         const row = element('div', 'definition-row');
@@ -1032,7 +1225,21 @@ async function saveSettings(event) {
             reward_public_key: rewardPublicKey,
             daily_redemption_limit: Number(byId('dailyRedemptionLimit').value),
         },
-        admin: { enabled: state.config.admin.enabled, bind: byId('bind').value, port: Number(byId('port').value), admin_ids: adminIds },
+        admin: {
+            enabled: byId('adminEnabled').value === 'true',
+            bind: byId('bind').value,
+            port: Number(byId('port').value),
+            admin_ids: adminIds,
+        },
+        player_web: {
+            enabled: byId('playerWebEnabled').value === 'true',
+            base_url: byId('playerWebBaseUrl').value.trim(),
+            allowed_origins: byId('playerWebOrigins').value.split(/\r?\n/).map(line => line.trim()).filter(Boolean),
+            ticket_ttl_minutes: Number(byId('ticketTtl').value),
+            session_ttl_minutes: Number(byId('sessionTtl').value),
+            sync_url: byId('syncUrl').value.trim(),
+            sync_token: byId('syncToken').value.trim(),
+        },
         ...action,
     };
     try {
@@ -1118,7 +1325,8 @@ document.querySelectorAll('[data-refresh]').forEach(button => button.addEventLis
 byId('logout').addEventListener('click', () => { sessionStorage.removeItem('lr_admin_token'); location.reload(); });
 byId('groupSearchButton').addEventListener('click', loadGroups);
 byId('groupAddButton').addEventListener('click', addGroup);
-byId('playerSearchButton').addEventListener('click', loadPlayers);
+byId('playerSearchButton').addEventListener('click', () => loadPlayers(1));
+byId('skillSearch').addEventListener('input', renderSkillList);
 byId('assetSearchButton').addEventListener('click', () => loadAssets(1));
 byId('assetCategory').addEventListener('change', () => loadAssets(1));
 byId('assetUploadInput').addEventListener('change', event => { const file = event.target.files[0]; if (file) uploadAsset(file); event.target.value = ''; });

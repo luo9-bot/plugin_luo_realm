@@ -1,10 +1,33 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::Serialize;
 
 use crate::core::Player;
 
 use super::{DatabaseError, DatabaseResult, player_id, unix_timestamp};
 
 const DISPLAY_NAME_MAX_CHARS: usize = 20;
+
+/// 由境界索引推导的基础战斗属性。
+///
+/// 角色属性不单独存储，完全由修行境界线性成长；管理端与命令端共用本公式。
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct RealmAttributes {
+    pub level: u32,
+    pub base_hp: i64,
+    pub base_attack: i64,
+    pub base_defense: i64,
+    pub speed: i64,
+}
+
+pub fn realm_attributes(realm_index: u32) -> RealmAttributes {
+    RealmAttributes {
+        level: realm_index + 1,
+        base_hp: 1000 + i64::from(realm_index) * 200,
+        base_attack: 100 + i64::from(realm_index) * 30,
+        base_defense: 50 + i64::from(realm_index) * 15,
+        speed: 10 + i64::from(realm_index),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistrationState {
@@ -151,20 +174,21 @@ pub fn get_active(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult
             |row| {
                 let id: i64 = row.get(0)?;
                 let realm_index: u32 = row.get(3)?;
+                let attributes = realm_attributes(realm_index);
                 Ok(Player {
                     user_id: id.to_string(),
                     display_name: row.get(1)?,
                     character_id: row.get(2)?,
-                    level: realm_index + 1,
+                    level: attributes.level,
                     experience: 0,
                     coins: row.get::<_, i64>(4)?.max(0) as u64,
                     marks: row.get::<_, i64>(5)?.max(0) as u64,
-                    base_hp: 1000 + i64::from(realm_index) * 200,
-                    base_attack: 100 + i64::from(realm_index) * 30,
-                    base_defense: 50 + i64::from(realm_index) * 15,
+                    base_hp: attributes.base_hp,
+                    base_attack: attributes.base_attack,
+                    base_defense: attributes.base_defense,
                     critical_rate: 5.0,
                     critical_multiplier: 1.5,
-                    speed: 10 + i64::from(realm_index),
+                    speed: attributes.speed,
                     wins: row.get::<_, i64>(6)?.max(0) as u64,
                     losses: row.get::<_, i64>(7)?.max(0) as u64,
                 })

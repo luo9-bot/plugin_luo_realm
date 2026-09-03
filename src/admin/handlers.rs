@@ -663,6 +663,7 @@ struct ConfigRequest {
     gameplay: GameplayConfig,
     game: GameConfig,
     admin: AdminConfig,
+    player_web: crate::config::PlayerWebConfig,
     reason: String,
     confirm: Option<String>,
 }
@@ -685,6 +686,7 @@ fn update_config(body: &[u8], state: &AdminState) -> HttpResponse {
     config.gameplay = request.gameplay;
     config.game = request.game;
     config.admin = request.admin;
+    config.player_web = request.player_web;
     if let Err(config_error) = config.validate() {
         return error(400, "invalid_config", &config_error.to_string());
     }
