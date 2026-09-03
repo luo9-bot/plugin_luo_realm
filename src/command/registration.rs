@@ -12,6 +12,65 @@ pub fn system_catalog() -> String {
         .join("、")
 }
 
+/// 中文体系名到体系标识的别名表；英文标识始终可用。
+const SYSTEM_ALIASES: &[(&str, &str)] = &[
+    ("修真", "orthodox"),
+    ("修仙", "orthodox"),
+    ("剑修", "sword"),
+    ("剑", "sword"),
+    ("体修", "body"),
+    ("武修", "body"),
+    ("法修", "mage"),
+    ("魔法师", "mage"),
+    ("灵修", "soul"),
+    ("魂师", "soul"),
+    ("气修", "qi"),
+    ("斗气", "qi"),
+    ("血魔", "blood_demon"),
+    ("血魔邪修", "blood_demon"),
+    ("邪修", "blood_demon"),
+    ("阵修", "formation"),
+    ("阵法师", "formation"),
+    ("丹器", "alchemy_artifact"),
+    ("丹器修", "alchemy_artifact"),
+    ("炼丹", "alchemy_artifact"),
+    ("炼器", "alchemy_artifact"),
+    ("召唤", "summoner"),
+    ("召唤流", "summoner"),
+    ("巫师", "summoner"),
+    ("音修", "music"),
+    ("乐师", "music"),
+];
+
+/// 把用户输入解析为体系标识：先按英文标识匹配，再按中文别名匹配。
+pub fn resolve_system(input: &str) -> Option<String> {
+    if engine::find_system(input).is_some() {
+        return Some(input.to_owned());
+    }
+    SYSTEM_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == input)
+        .map(|(_, id)| (*id).to_owned())
+}
+
+/// 体系的一句定位文案，供体系卡片使用。
+pub fn system_positioning(id: &str) -> &'static str {
+    match id {
+        "orthodox" => "多工具 · 慢成长 · 高上限",
+        "sword" => "爆发追击 · 以攻代守",
+        "body" => "贴身压制 · 金刚不坏",
+        "mage" => "远程范围 · 元素塑场",
+        "soul" => "韧性压制 · 领域控制",
+        "qi" => "近中距均衡 · 形态百变",
+        "blood_demon" => "以命换势 · 速成爆发",
+        "formation" => "布阵控场 · 越阶困敌",
+        "alchemy_artifact" => "丹器济世 · 战前筹备",
+        "summoner" => "多单位协同 · 契约指挥",
+        "music" => "群体增减益 · 曲势连绵",
+        _ => "自成一道",
+    }
+}
+
 pub fn register(
     database: &mut Database,
     user_id: u64,
@@ -50,16 +109,18 @@ pub fn select_system(
     user_id: u64,
     arguments: &[&str],
 ) -> Result<String, DatabaseError> {
-    let Some(system_id) = arguments.first().copied() else {
-        return Ok("请发送“选择体系 <体系标识>”，可先发送“体系”查看。".into());
+    let Some(system_input) = arguments.first().copied() else {
+        return Ok("请发送“选择体系 <体系名称>”，可先发送“体系”查看。".into());
     };
-    let Some(system) = engine::find_system(system_id) else {
+    let Some(system_id) = resolve_system(system_input) else {
         return Ok("未知修行体系，请发送“体系”查看。".into());
     };
+    let system = engine::find_system(&system_id)
+        .ok_or_else(|| DatabaseError::InvalidData("unknown player cultivation system".into()))?;
 
     let system_name = system.name();
     let transaction = database.immediate_transaction()?;
-    let activated = database::player::activate_system(&transaction, user_id, system_id)?;
+    let activated = database::player::activate_system(&transaction, user_id, &system_id)?;
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
 
     Ok(if activated {
@@ -88,4 +149,51 @@ pub fn rename(
     };
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
     Ok(format!("角色名称已修改为：{display_name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_system, system_positioning};
+
+    #[test]
+    fn chinese_names_resolve_to_system_ids() {
+        assert_eq!(resolve_system("剑修").as_deref(), Some("sword"));
+        assert_eq!(resolve_system("血魔").as_deref(), Some("blood_demon"));
+        assert_eq!(
+            resolve_system("丹器修").as_deref(),
+            Some("alchemy_artifact")
+        );
+        assert_eq!(resolve_system("召唤流").as_deref(), Some("summoner"));
+    }
+
+    #[test]
+    fn english_ids_still_resolve() {
+        assert_eq!(resolve_system("sword").as_deref(), Some("sword"));
+        assert_eq!(resolve_system("music").as_deref(), Some("music"));
+    }
+
+    #[test]
+    fn unknown_input_is_rejected() {
+        assert_eq!(resolve_system("剑圣"), None);
+        assert_eq!(resolve_system(""), None);
+    }
+
+    #[test]
+    fn every_system_has_positioning_copy() {
+        for id in [
+            "orthodox",
+            "sword",
+            "body",
+            "mage",
+            "soul",
+            "qi",
+            "blood_demon",
+            "formation",
+            "alchemy_artifact",
+            "summoner",
+            "music",
+        ] {
+            assert_ne!(system_positioning(id), "自成一道", "{id} 缺少定位文案");
+        }
+    }
 }

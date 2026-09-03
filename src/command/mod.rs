@@ -162,20 +162,17 @@ fn dispatch(
     config: &RuntimeConfig,
 ) -> Result<String, DatabaseError> {
     match command {
-        Command::Menu => Ok(format!(
-            "{}：注册 / 体系 / 选择体系 / 签到 / 修行行动 / 技能 / 战术 / 装备 / 状态 / 今日状态 / 战力 / 每日事件 / 世界事件 / 决斗 / 御空试炼 / 兑换 / 排行 / 改名",
-            identity::PRODUCT_NAME
-        )),
-        Command::Systems => Ok(format!("可选修行体系：{}", registration::system_catalog())),
+        Command::Menu => menu(database, root),
+        Command::Systems => systems(database, root),
         Command::Register => registration::register(database, user_id, arguments),
         Command::SelectSystem => registration::select_system(database, user_id, arguments),
         Command::Rename => registration::rename(database, user_id, arguments),
         Command::Power => power(database, user_id),
         Command::Profile => profile(database, root, user_id),
         Command::CheckIn => check_in(database, group_id, user_id),
-        Command::Event => event(database, group_id, user_id),
+        Command::Event => event(database, root, group_id, user_id),
         Command::DailyState => daily_state(database, user_id),
-        Command::WorldEvent => world_event(database, group_id, user_id),
+        Command::WorldEvent => world_event(database, root, group_id, user_id),
         Command::Ranking => ranking(database, user_id),
         Command::Duel => duel(
             database,
@@ -187,12 +184,67 @@ fn dispatch(
         ),
         Command::AsciiFpv => ascii_fpv(database, root, user_id, &config.game),
         Command::Redeem => redeem(database, user_id, arguments, &config.game),
-        Command::Skills => skills(database, user_id, arguments),
+        Command::Skills => skills(database, root, user_id, arguments),
         Command::Tactic => tactic(database, user_id, arguments),
-        Command::Equipment => equipment(database, user_id, arguments),
+        Command::Equipment => equipment(database, root, user_id, arguments),
         Command::Cultivate => cultivate(database, user_id, arguments),
         Command::HomePage => home_page(database, root, user_id, &config.player_web),
     }
+}
+
+/// 把卡片渲染到插件数据目录并返回图片回复；失败时回退文字。
+fn card_reply<F>(root: &Path, file_name: &str, render: F, fallback: String) -> String
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    let image = card_path(root, file_name);
+    match render(root, &image) {
+        Ok(()) => image_reply(&image),
+        Err(error) => {
+            eprintln!("[Luo Realm] card rendering failed: {error}");
+            fallback
+        }
+    }
+}
+
+fn card_path(root: &Path, file_name: &str) -> std::path::PathBuf {
+    root.join(identity::DATA_DIRECTORY)
+        .join("cards")
+        .join(file_name)
+}
+
+fn image_reply(path: &Path) -> String {
+    format!("[CQ:image,file={}]", path.display())
+}
+
+/// 玩法菜单卡片（图片优先）。
+fn menu(database: &mut Database, root: &Path) -> Result<String, DatabaseError> {
+    let _ = database;
+    let fallback = format!(
+        "{}：注册 / 体系 / 选择体系 / 签到 / 修行行动 / 技能 / 战术 / 装备 / 状态 / 今日状态 / 战力 / 每日事件 / 世界事件 / 决斗 / 御空试炼 / 兑换 / 排行 / 改名",
+        identity::PRODUCT_NAME
+    );
+    Ok(card_reply(root, "menu.png", render::menu, fallback))
+}
+
+/// 修行体系总览卡片（图片优先）。
+fn systems(database: &mut Database, root: &Path) -> Result<String, DatabaseError> {
+    let _ = database;
+    let entries = crate::cultivation::registered_systems()
+        .into_iter()
+        .map(|system| render::SystemCardEntry {
+            name: system.name().to_owned(),
+            id: system.id().to_owned(),
+            positioning: registration::system_positioning(system.id()).to_owned(),
+        })
+        .collect::<Vec<_>>();
+    let fallback = format!("可选修行体系：{}", registration::system_catalog());
+    Ok(card_reply(
+        root,
+        "systems.png",
+        |root, path| render::systems(root, &entries, path),
+        fallback,
+    ))
 }
 
 /// 签发一次性网页票据并返回档案页链接（设计方案书 20.3）。
@@ -309,11 +361,11 @@ fn active_player(transaction: &Transaction<'_>, user_id: u64) -> Result<Player, 
 
 fn skills(
     database: &mut Database,
+    root: &Path,
     user_id: u64,
     arguments: &[&str],
 ) -> Result<String, DatabaseError> {
     let transaction = database.immediate_transaction()?;
-    let skills = database::skills::list(&transaction, user_id)?;
     if let Some(skill_id) = arguments.first()
         && arguments.get(1).is_some_and(|action| *action == "研习")
     {
@@ -321,9 +373,19 @@ fn skills(
         transaction.commit().map_err(DatabaseError::from_sqlite)?;
         return Ok(format!("技能 {skill_id} 熟练度提升至 {mastery}/3。"));
     }
+    let player = active_player(&transaction, user_id)?;
+    let cultivation = database::cultivation::get(&transaction, user_id)?;
+    let skill_list = database::skills::list(&transaction, user_id)?;
+    let tactic = database::skills::current_tactic(&transaction, user_id)?;
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
-    Ok(skills
-        .into_iter()
+    let system = engine::find_system(&cultivation.system_id)
+        .ok_or_else(|| DatabaseError::InvalidData("unknown player cultivation system".into()))?;
+    let skills = skill_list
+        .iter()
+        .map(|skill| (skill.definition.name.clone(), skill.mastery))
+        .collect::<Vec<_>>();
+    let fallback = skill_list
+        .iter()
         .map(|skill| {
             format!(
                 "{} {}（熟练度 {}/3）",
@@ -331,7 +393,20 @@ fn skills(
             )
         })
         .collect::<Vec<_>>()
-        .join("\n"))
+        .join("\n");
+    let data = render::SkillCardData {
+        display_name: &player.display_name,
+        system_name: system.name(),
+        system_id: &cultivation.system_id,
+        tactic_name: tactic.name(),
+        skills: &skills,
+    };
+    Ok(card_reply(
+        root,
+        &format!("skills_{user_id}.png"),
+        |root, path| render::skills(root, &data, path),
+        fallback,
+    ))
 }
 
 fn tactic(
@@ -352,6 +427,7 @@ fn tactic(
 
 fn equipment(
     database: &mut Database,
+    root: &Path,
     user_id: u64,
     arguments: &[&str],
 ) -> Result<String, DatabaseError> {
@@ -382,21 +458,53 @@ fn equipment(
             "该装备槽为空。".into()
         });
     }
+    let player = active_player(&transaction, user_id)?;
+    let cultivation = database::cultivation::get(&transaction, user_id)?;
     let items = database::inventory::list(&transaction, user_id)?;
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
-    Ok(items
-        .into_iter()
+    let system = engine::find_system(&cultivation.system_id)
+        .ok_or_else(|| DatabaseError::InvalidData("unknown player cultivation system".into()))?;
+    let equipped = items
+        .iter()
+        .filter_map(|item| {
+            item.equipped_slot
+                .clone()
+                .map(|slot| (slot, item.definition_id.clone()))
+        })
+        .collect::<Vec<_>>();
+    let bag = items
+        .iter()
+        .filter(|item| item.equipped_slot.is_none())
+        .map(|item| (item.definition_id.clone(), item.quantity))
+        .collect::<Vec<_>>();
+    let fallback = items
+        .iter()
         .map(|item| {
             format!(
                 "#{} {} x{} {}",
                 item.item_id,
                 item.definition_id,
                 item.quantity,
-                item.equipped_slot.unwrap_or_else(|| "未装备".into())
+                item.equipped_slot
+                    .clone()
+                    .unwrap_or_else(|| "未装备".into())
             )
         })
         .collect::<Vec<_>>()
-        .join("\n"))
+        .join("\n");
+    let data = render::EquipmentCardData {
+        display_name: &player.display_name,
+        system_name: system.name(),
+        system_id: &cultivation.system_id,
+        equipped: &equipped,
+        bag: &bag,
+    };
+    Ok(card_reply(
+        root,
+        &format!("equipment_{user_id}.png"),
+        |root, path| render::equipment(root, &data, path),
+        fallback,
+    ))
 }
 
 fn cultivate(
@@ -577,7 +685,12 @@ fn check_in(database: &mut Database, group_id: u64, user_id: u64) -> Result<Stri
     Ok(reply)
 }
 
-fn event(database: &mut Database, group_id: u64, user_id: u64) -> Result<String, DatabaseError> {
+fn event(
+    database: &mut Database,
+    root: &Path,
+    group_id: u64,
+    user_id: u64,
+) -> Result<String, DatabaseError> {
     let date = database.local_date()?;
     let transaction = database.immediate_transaction()?;
     active_player(&transaction, user_id)?;
@@ -609,8 +722,29 @@ fn event(database: &mut Database, group_id: u64, user_id: u64) -> Result<String,
         database::world_event::ContributionResult::default()
     };
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
-    Ok(format!("今日机缘：{}", persisted.definition_id)
-        + world_completion_message(contribution.completed))
+    let world_line = if contribution.completed {
+        "世界事件目标已达成，贡献奖励已入账。"
+    } else {
+        "群内签到、机缘与决斗会推进今日世界事件。"
+    };
+    let fallback = format!("今日机缘：{}", persisted.definition_id)
+        + world_completion_message(contribution.completed);
+    Ok(card_reply(
+        root,
+        &format!("destiny_{user_id}.png"),
+        |root, path| {
+            render::destiny(
+                root,
+                &render::DestinyCardData {
+                    destiny_name: &persisted.definition_id,
+                    description: engine::event::description(definition),
+                    world_event_line: Some(world_line),
+                },
+                path,
+            )
+        },
+        fallback,
+    ))
 }
 
 fn daily_state(database: &mut Database, user_id: u64) -> Result<String, DatabaseError> {
@@ -633,6 +767,7 @@ fn daily_state(database: &mut Database, user_id: u64) -> Result<String, Database
 
 fn world_event(
     database: &mut Database,
+    root: &Path,
     group_id: u64,
     user_id: u64,
 ) -> Result<String, DatabaseError> {
@@ -642,9 +777,43 @@ fn world_event(
     let date = database.local_date()?;
     let transaction = database.immediate_transaction()?;
     database::daily_state::get_or_create(&transaction, user_id, &date)?;
-    let summary = database::world_event::summary(&transaction, group_id, &date)?;
+    let detail = database::world_event::detail(&transaction, group_id, &date)?;
     transaction.commit().map_err(DatabaseError::from_sqlite)?;
-    Ok(summary)
+    let status = if detail.completed {
+        "已完成"
+    } else {
+        "进行中"
+    };
+    let objectives = detail
+        .objectives
+        .iter()
+        .map(|(label, current, target)| format!("- {label}：{current}/{target}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let fallback = format!(
+        "今日世界事件·{}（{status}）\n{}\n{}\n完成奖励：金币 {}、刻印 {}",
+        detail.name, detail.description, objectives, detail.coin_reward, detail.mark_reward
+    );
+    Ok(card_reply(
+        root,
+        &format!("world_event_{group_id}.png"),
+        |root, path| {
+            render::world_event(
+                root,
+                &render::WorldEventCardData {
+                    event_name: &detail.name,
+                    description: &detail.description,
+                    status,
+                    completed: detail.completed,
+                    coin_reward: detail.coin_reward,
+                    mark_reward: detail.mark_reward,
+                    objectives: &detail.objectives,
+                },
+                path,
+            )
+        },
+        fallback,
+    ))
 }
 
 fn ranking(database: &mut Database, user_id: u64) -> Result<String, DatabaseError> {

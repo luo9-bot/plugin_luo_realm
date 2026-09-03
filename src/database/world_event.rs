@@ -157,10 +157,21 @@ fn record_contribution(
     Ok(true)
 }
 
-pub fn summary(transaction: &Transaction<'_>, group_id: u64, date: &str) -> DatabaseResult<String> {
-    if group_id == 0 {
-        return Ok("群世界事件仅在群聊中开放。".into());
-    }
+/// 世界事件的结构化详情，供卡片与文字视图共用。
+pub struct EventDetail {
+    pub name: String,
+    pub description: String,
+    pub completed: bool,
+    pub coin_reward: i64,
+    pub mark_reward: i64,
+    pub objectives: Vec<(String, i64, i64)>,
+}
+
+pub fn detail(
+    transaction: &Transaction<'_>,
+    group_id: u64,
+    date: &str,
+) -> DatabaseResult<EventDetail> {
     let definition = ensure_event(transaction, group_id, date)?;
     let group = player_id(group_id)?;
     let status: String = transaction
@@ -171,32 +182,14 @@ pub fn summary(transaction: &Transaction<'_>, group_id: u64, date: &str) -> Data
         )
         .map_err(DatabaseError::from_sqlite)?;
     let objectives = objective_progress(transaction, group, date)?;
-    let contributors: i64 = transaction
-        .query_row(
-            "SELECT COUNT(DISTINCT player_id) FROM group_event_contributions
-             WHERE group_id=?1 AND event_date=?2",
-            params![group, date],
-            |row| row.get(0),
-        )
-        .map_err(DatabaseError::from_sqlite)?;
-    let lines = objectives
-        .into_iter()
-        .map(|(label, current, target)| format!("- {label}：{current}/{target}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let state = if status == "completed" {
-        "已完成"
-    } else {
-        "进行中"
-    };
-    Ok(format!(
-        "今日世界事件·{}（{state}）\n{}\n{}\n贡献者：{contributors} 人\n完成奖励：金币 {}、刻印 {}",
-        definition.name,
-        definition.description,
-        lines,
-        definition.coin_reward,
-        definition.mark_reward,
-    ))
+    Ok(EventDetail {
+        name: definition.name,
+        description: definition.description,
+        completed: status == "completed",
+        coin_reward: definition.coin_reward,
+        mark_reward: definition.mark_reward,
+        objectives,
+    })
 }
 
 fn ensure_event(
