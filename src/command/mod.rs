@@ -235,7 +235,7 @@ fn systems(database: &mut Database, root: &Path) -> Result<String, DatabaseError
         .map(|system| render::SystemCardEntry {
             name: system.name().to_owned(),
             id: system.id().to_owned(),
-            positioning: registration::system_positioning(system.id()).to_owned(),
+            positioning: crate::render::card::system_positioning(system.id()).to_owned(),
         })
         .collect::<Vec<_>>();
     let fallback = format!("可选修行体系：{}", registration::system_catalog());

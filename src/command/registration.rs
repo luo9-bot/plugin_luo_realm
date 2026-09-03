@@ -53,24 +53,6 @@ pub fn resolve_system(input: &str) -> Option<String> {
         .map(|(_, id)| (*id).to_owned())
 }
 
-/// 体系的一句定位文案，供体系卡片使用。
-pub fn system_positioning(id: &str) -> &'static str {
-    match id {
-        "orthodox" => "多工具 · 慢成长 · 高上限",
-        "sword" => "爆发追击 · 以攻代守",
-        "body" => "贴身压制 · 金刚不坏",
-        "mage" => "远程范围 · 元素塑场",
-        "soul" => "韧性压制 · 领域控制",
-        "qi" => "近中距均衡 · 形态百变",
-        "blood_demon" => "以命换势 · 速成爆发",
-        "formation" => "布阵控场 · 越阶困敌",
-        "alchemy_artifact" => "丹器济世 · 战前筹备",
-        "summoner" => "多单位协同 · 契约指挥",
-        "music" => "群体增减益 · 曲势连绵",
-        _ => "自成一道",
-    }
-}
-
 pub fn register(
     database: &mut Database,
     user_id: u64,
@@ -153,7 +135,7 @@ pub fn rename(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_system, system_positioning};
+    use super::resolve_system;
 
     #[test]
     fn chinese_names_resolve_to_system_ids() {
@@ -176,24 +158,5 @@ mod tests {
     fn unknown_input_is_rejected() {
         assert_eq!(resolve_system("剑圣"), None);
         assert_eq!(resolve_system(""), None);
-    }
-
-    #[test]
-    fn every_system_has_positioning_copy() {
-        for id in [
-            "orthodox",
-            "sword",
-            "body",
-            "mage",
-            "soul",
-            "qi",
-            "blood_demon",
-            "formation",
-            "alchemy_artifact",
-            "summoner",
-            "music",
-        ] {
-            assert_ne!(system_positioning(id), "自成一道", "{id} 缺少定位文案");
-        }
     }
 }

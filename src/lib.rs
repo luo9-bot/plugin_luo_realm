@@ -13,7 +13,7 @@ pub mod identity;
 pub mod player_web;
 
 mod paths;
-mod render;
+pub mod render;
 
 use std::{
     panic::{self, AssertUnwindSafe},

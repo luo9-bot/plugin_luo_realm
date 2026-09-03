@@ -92,6 +92,29 @@ fn skill_and_equipment_cards_render() {
 }
 
 #[test]
+fn every_system_has_positioning_copy() {
+    for id in [
+        "orthodox",
+        "sword",
+        "body",
+        "mage",
+        "soul",
+        "qi",
+        "blood_demon",
+        "formation",
+        "alchemy_artifact",
+        "summoner",
+        "music",
+    ] {
+        assert_ne!(
+            super::system_positioning(id),
+            "自成一道",
+            "{id} 缺少定位文案"
+        );
+    }
+}
+
+#[test]
 fn destiny_and_world_event_cards_render() {
     let destiny_data = DestinyCardData {
         destiny_name: "资源潮汐",

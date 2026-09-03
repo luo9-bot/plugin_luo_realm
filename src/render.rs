@@ -1,6 +1,6 @@
 pub(crate) mod assets;
 pub(crate) mod battle;
-pub(crate) mod card;
+pub mod card;
 mod profile;
 
 use std::{io, path::Path};

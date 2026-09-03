@@ -85,6 +85,24 @@ pub struct SystemCardEntry {
     pub positioning: String,
 }
 
+/// 体系的一句定位文案。
+pub fn system_positioning(id: &str) -> &'static str {
+    match id {
+        "orthodox" => "多工具 · 慢成长 · 高上限",
+        "sword" => "爆发追击 · 以攻代守",
+        "body" => "贴身压制 · 金刚不坏",
+        "mage" => "远程范围 · 元素塑场",
+        "soul" => "韧性压制 · 领域控制",
+        "qi" => "近中距均衡 · 形态百变",
+        "blood_demon" => "以命换势 · 速成爆发",
+        "formation" => "布阵控场 · 越阶困敌",
+        "alchemy_artifact" => "丹器济世 · 战前筹备",
+        "summoner" => "多单位协同 · 契约指挥",
+        "music" => "群体增减益 · 曲势连绵",
+        _ => "自成一道",
+    }
+}
+
 /// 渲染修行体系总览卡片。
 pub fn systems(root: &Path, entries: &[SystemCardEntry], path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
@@ -93,7 +111,7 @@ pub fn systems(root: &Path, entries: &[SystemCardEntry], path: &Path) -> io::Res
         let column = (index % 2) as u32;
         let row = (index / 2) as u32;
         let x = 36 + column * 456;
-        let y = 90 + row * 74;
+        let y = 76 + row * 72;
         fill(&mut image, x, y, 432, 62, CARD_BG);
         fill(&mut image, x, y, 6, 62, system_color(&entry.id));
         if let Some(font) = assets.font() {
@@ -442,6 +460,7 @@ pub(crate) fn finish(
     footnote: Option<&str>,
     path: &Path,
 ) -> io::Result<()> {
+    fill(image, 0, 0, WIDTH, HEADER_HEIGHT, HEADER);
     if let Some(font) = assets.font() {
         label(image, font, 30.0, 34, 10, LIGHT_TEXT, title);
         if let Some(footnote) = footnote {
