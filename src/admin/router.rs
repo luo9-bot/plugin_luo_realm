@@ -6,7 +6,7 @@ use std::{
 
 use tiny_http::{Header, Method, Request, Response, StatusCode};
 
-use crate::{config::RuntimePolicy, database::Database};
+use crate::{config::RuntimePolicy, database::Database, player_web};
 
 use super::{auth::AdminToken, handlers, ui};
 
@@ -31,6 +31,10 @@ pub fn route(request: &mut Request, state: &Arc<AdminState>) -> HttpResponse {
     let method = request.method().clone();
     let url = request.url().to_owned();
     let path = url.split('?').next().unwrap_or(&url);
+
+    if let Some(response) = player_web::route(method.clone(), path, request, state) {
+        return response;
+    }
 
     if method == Method::Get && matches!(path, "/" | "/index.html") {
         return html(ui::HTML);
@@ -106,7 +110,7 @@ fn requires_upload_slot(method: &Method, path: &str) -> bool {
         )
 }
 
-fn read_body(request: &mut Request, limit: usize) -> Result<Vec<u8>, HttpResponse> {
+pub(crate) fn read_body(request: &mut Request, limit: usize) -> Result<Vec<u8>, HttpResponse> {
     if request.body_length().unwrap_or(0) > limit {
         return Err(error(413, "body_too_large", "请求体超过该接口允许的大小"));
     }
@@ -161,7 +165,7 @@ fn json(status: u16, value: serde_json::Value) -> HttpResponse {
     ))
 }
 
-fn html(content: &str) -> HttpResponse {
+pub(crate) fn html(content: &str) -> HttpResponse {
     let response = Response::from_data(content.as_bytes().to_vec());
     let response = with_header(response, "Content-Type", "text/html; charset=utf-8");
     secure_headers(with_header(
@@ -171,7 +175,7 @@ fn html(content: &str) -> HttpResponse {
     ))
 }
 
-fn static_text(content: &str, content_type: &str) -> HttpResponse {
+pub(crate) fn static_text(content: &str, content_type: &str) -> HttpResponse {
     secure_headers(with_header(
         Response::from_data(content.as_bytes().to_vec()),
         "Content-Type",

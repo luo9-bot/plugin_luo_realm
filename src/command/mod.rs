@@ -6,7 +6,7 @@ use rusqlite::Transaction;
 
 use crate::{
     combat,
-    config::{CommandConfig, GameConfig, GameplayConfig, RuntimeConfig},
+    config::{CommandConfig, GameConfig, GameplayConfig, PlayerWebConfig, RuntimeConfig},
     core::{Player, stable_seed},
     database::{self, Database, DatabaseError},
     domain::shared::GroupId,
@@ -45,6 +45,7 @@ enum Command {
     Tactic,
     Equipment,
     Cultivate,
+    HomePage,
 }
 
 impl Command {
@@ -69,6 +70,7 @@ impl Command {
             "战术" | "tactic" => Some(Self::Tactic),
             "装备" | "equipment" => Some(Self::Equipment),
             "修行行动" | "cultivate" => Some(Self::Cultivate),
+            "主页" | "个人主页" | "网页" => Some(Self::HomePage),
             _ => None,
         }
     }
@@ -189,7 +191,39 @@ fn dispatch(
         Command::Tactic => tactic(database, user_id, arguments),
         Command::Equipment => equipment(database, user_id, arguments),
         Command::Cultivate => cultivate(database, user_id, arguments),
+        Command::HomePage => home_page(database, root, user_id, &config.player_web),
     }
+}
+
+/// 签发一次性网页票据并返回档案页链接（设计方案书 20.3）。
+fn home_page(
+    database: &mut Database,
+    root: &Path,
+    user_id: u64,
+    config: &PlayerWebConfig,
+) -> Result<String, DatabaseError> {
+    if !config.enabled {
+        return Ok("玩家网页尚未启用，请联系管理员在配置中开启。".into());
+    }
+    let token_path = crate::paths::data_directory(root).join("admin.token");
+    let token = crate::admin::auth::AdminToken::load_or_create(&token_path)
+        .map_err(|error| DatabaseError::InvalidData(format!("签名密钥不可用：{error}")))?;
+    let key = token.signing_key();
+    let transaction = database.immediate_transaction()?;
+    active_player(&transaction, user_id)?;
+    let ticket = crate::player_web::ticket::issue(
+        &transaction,
+        user_id,
+        crate::player_web::session::SCOPE_PROFILE_READ,
+        &key,
+        crate::database::unix_timestamp(),
+        i64::from(config.ticket_ttl_minutes) * 60,
+    )?;
+    transaction.commit().map_err(DatabaseError::from_sqlite)?;
+    Ok(format!(
+        "你的专属档案页已生成（{0} 分钟内有效，仅可打开一次）：\n{1}?ticket={2}\n页面只读，修行操作仍在群聊完成。",
+        config.ticket_ttl_minutes, config.base_url, ticket.token
+    ))
 }
 
 fn ascii_fpv(

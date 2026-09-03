@@ -49,6 +49,15 @@ pub fn get_or_create(
     Ok(state)
 }
 
+/// 只读取当天已生成的每日状态；不触发生成，供网页只读接口使用。
+pub fn existing(
+    transaction: &Transaction<'_>,
+    user_id: u64,
+    date: &str,
+) -> DatabaseResult<Option<DailyState>> {
+    find(transaction, user_id, date)
+}
+
 fn find(
     transaction: &Transaction<'_>,
     user_id: u64,

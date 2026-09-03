@@ -1,7 +1,7 @@
 mod assets;
 pub mod auth;
 mod handlers;
-mod router;
+pub(crate) mod router;
 mod transfer;
 mod ui;
 

@@ -60,6 +60,13 @@ impl Database {
             .map_err(DatabaseError::from_sqlite)
     }
 
+    /// 只读用途的 deferred 事务：不抢占写锁，供网页视图查询使用。
+    pub fn read_transaction(&mut self) -> DatabaseResult<Transaction<'_>> {
+        self.connection
+            .transaction()
+            .map_err(DatabaseError::from_sqlite)
+    }
+
     pub fn connection(&self) -> &Connection {
         &self.connection
     }

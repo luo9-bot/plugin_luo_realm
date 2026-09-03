@@ -15,7 +15,7 @@ pub mod wallet;
 pub mod world_event;
 
 mod connection;
-mod migrations;
+pub(crate) mod migrations;
 
 pub use connection::Database;
 pub use error::{DatabaseError, DatabaseResult};

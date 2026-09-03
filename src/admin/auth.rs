@@ -51,6 +51,17 @@ impl AdminToken {
         difference == 0
     }
 
+    /// 玩家网页票据与会话的 HMAC 签名密钥。
+    ///
+    /// 复用管理 Token 的摘要作为根密钥并做域分离：轮换 Token 会立即失效
+    /// 所有未使用的票据与网页会话，这是预期的安全行为。
+    pub fn signing_key(&self) -> [u8; 32] {
+        *self
+            .digest
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
     pub fn rotate(&self, replacement: &str, path: &Path) -> Result<(), AuthError> {
         let replacement = replacement.trim();
         if replacement.len() < MIN_TOKEN_LENGTH {

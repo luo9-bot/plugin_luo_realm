@@ -10,6 +10,7 @@ pub mod engine;
 pub mod equipment;
 pub mod game;
 pub mod identity;
+pub mod player_web;
 
 mod paths;
 mod render;

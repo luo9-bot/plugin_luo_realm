@@ -399,6 +399,11 @@ fn ensure_default_loadout(
         })
 }
 
+/// 只读查询当前战术预设；未设置时返回默认 `balanced`。
+pub fn current_tactic(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult<Tactic> {
+    tactic(transaction, user_id)
+}
+
 fn tactic(transaction: &Transaction<'_>, user_id: u64) -> DatabaseResult<Tactic> {
     let code = transaction
         .query_row(

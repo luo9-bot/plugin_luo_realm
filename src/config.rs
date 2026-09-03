@@ -19,6 +19,7 @@ pub struct RuntimeConfig {
     pub gameplay: GameplayConfig,
     pub game: GameConfig,
     pub admin: AdminConfig,
+    pub player_web: PlayerWebConfig,
 }
 
 impl Default for RuntimeConfig {
@@ -30,6 +31,7 @@ impl Default for RuntimeConfig {
             gameplay: GameplayConfig::default(),
             game: GameConfig::default(),
             admin: AdminConfig::default(),
+            player_web: PlayerWebConfig::default(),
         }
     }
 }
@@ -138,6 +140,7 @@ impl RuntimeConfig {
                 ));
             }
         }
+        self.player_web.validate()?;
         let unique = self
             .admin
             .admin_ids
@@ -263,6 +266,80 @@ impl Default for AdminConfig {
     }
 }
 
+/// 玩家网页（只读档案页）配置。
+///
+/// 群聊命令 `主页` 签发一次性票据，返回 `{base_url}?ticket=...`；页面用票据
+/// 换取短期会话后只能调用 `profile:read` 范围内的只读接口。写入型操作仍由
+/// 群聊命令完成（设计方案书 20.3、27.2）。
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PlayerWebConfig {
+    pub enabled: bool,
+    /// 玩家页面基地址，不得以 `/` 结尾、不得携带查询或片段。
+    pub base_url: String,
+    /// 允许跨域访问玩家 API 的页面来源；为空时仅同源页面可用。
+    pub allowed_origins: Vec<String>,
+    /// 一次性票据有效期（分钟）。
+    pub ticket_ttl_minutes: u32,
+    /// 网页会话有效期（分钟）。
+    pub session_ttl_minutes: u32,
+}
+
+impl Default for PlayerWebConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: "http://127.0.0.1:18765/player".into(),
+            allowed_origins: Vec::new(),
+            ticket_ttl_minutes: 10,
+            session_ttl_minutes: 120,
+        }
+    }
+}
+
+impl PlayerWebConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if !valid_web_url(&self.base_url) {
+            return Err(ConfigError::InvalidPlayerWeb(
+                "player web base_url must be an http(s) URL without query, fragment or trailing slash"
+                    .into(),
+            ));
+        }
+        for origin in &self.allowed_origins {
+            if !valid_web_url(origin) {
+                return Err(ConfigError::InvalidPlayerWeb(format!(
+                    "allowed origin {origin} must be an http(s) origin without a path"
+                )));
+            }
+        }
+        if !(1..=60).contains(&self.ticket_ttl_minutes) {
+            return Err(ConfigError::InvalidPlayerWeb(
+                "ticket ttl must be between 1 and 60 minutes".into(),
+            ));
+        }
+        if !(5..=1_440).contains(&self.session_ttl_minutes) {
+            return Err(ConfigError::InvalidPlayerWeb(
+                "session ttl must be between 5 and 1440 minutes".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 校验玩家网页使用的 http(s) 地址：无空白、无查询、无片段、不以 `/` 结尾。
+fn valid_web_url(value: &str) -> bool {
+    let value = value.trim();
+    (value.starts_with("http://") || value.starts_with("https://"))
+        && !value.contains(char::is_whitespace)
+        && !value.contains('?')
+        && !value.contains('#')
+        && !value.ends_with('/')
+        && value.len() <= 2_048
+}
+
 #[derive(Clone)]
 pub struct RuntimePolicy {
     config: Arc<RwLock<RuntimeConfig>>,
@@ -340,6 +417,8 @@ pub enum ConfigError {
     InvalidAdmin(String),
     #[error("invalid game configuration: {0}")]
     InvalidGame(String),
+    #[error("invalid player web configuration: {0}")]
+    InvalidPlayerWeb(String),
 }
 
 #[cfg(test)]

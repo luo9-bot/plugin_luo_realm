@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Luo Realm 档案</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="seal">玄</span> Luo Realm</div>
+  <div class="session-note" id="session-note"></div>
+</header>
+
+<main id="app">
+  <section class="gate" id="gate">
+    <div class="gate-card">
+      <h1>专属档案页</h1>
+      <p id="gate-message">正在验证访问凭据……</p>
+      <p class="hint">档案页为一次性链接进入，只读展示你的修行资料。<br>
+      在群里发送 <code>主页</code> 可获取新的进入链接。</p>
+    </div>
+  </section>
+
+  <div id="content" class="content hidden">
+    <section class="hero card" id="profile-hero">
+      <div class="hero-main">
+        <div class="avatar" id="hero-avatar">玄</div>
+        <div>
+          <h1 id="profile-name">—</h1>
+          <p id="profile-line" class="muted">—</p>
+        </div>
+      </div>
+      <div class="hero-power">
+        <span class="power-label">战力</span>
+        <span class="power-value" id="profile-power">—</span>
+      </div>
+    </section>
+
+    <section class="card" id="daily-card">
+      <h2>今日状态</h2>
+      <p id="daily-name" class="daily-name">—</p>
+      <p id="daily-desc" class="muted">—</p>
+    </section>
+
+    <nav class="tabs" id="tabs">
+      <button data-view="wallet" class="active">资产</button>
+      <button data-view="skills">技能</button>
+      <button data-view="equipment">装备</button>
+      <button data-view="battles">战斗</button>
+    </nav>
+
+    <section class="view card" id="view-wallet">
+      <h2>资产</h2>
+      <div class="balances" id="wallet-balances"></div>
+      <h3>最近流水</h3>
+      <ul class="rows" id="wallet-transactions"></ul>
+    </section>
+
+    <section class="view card hidden" id="view-skills">
+      <h2>技能</h2>
+      <p class="muted" id="tactic-line">—</p>
+      <ul class="rows" id="skill-list"></ul>
+    </section>
+
+    <section class="view card hidden" id="view-equipment">
+      <h2>背包与装备</h2>
+      <ul class="rows" id="item-list"></ul>
+    </section>
+
+    <section class="view card hidden" id="view-battles">
+      <h2>最近战斗</h2>
+      <ul class="rows" id="battle-list"></ul>
+    </section>
+  </div>
+</main>
+
+<footer class="foot">只读档案 · 修行操作请在群聊完成</footer>
+<script src="app.js"></script>
+</body>
+</html>
