@@ -156,7 +156,15 @@ pub extern "C" fn plugin_main() {
         return;
     };
 
+    let version_topic = Bus::topic(luo9_sdk::version::TOPIC_VERSION);
+    let version_subscriber = version_topic.subscribe().ok();
+
     loop {
+        if let Some(json) = version_subscriber.and_then(|id| version_topic.pop(id))
+            && luo9_sdk::version::is_version_query(&json)
+        {
+            luo9_sdk::version::reply_version(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        }
         if let Some(json) = topic.pop(subscriber)
             && let Some(BusPayload::Message(message)) = BusPayload::parse(&json)
         {
