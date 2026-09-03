@@ -710,7 +710,6 @@ fn profile(database: &mut Database, root: &Path, user_id: u64) -> Result<String,
         system_id: &cultivation.system_id,
         system_name: system.name(),
         realm_name,
-        realm_index: cultivation.realm_index,
         progress: cultivation.progress,
         power: combat_profile.power,
     };

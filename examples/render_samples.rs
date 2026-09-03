@@ -177,7 +177,6 @@ fn main() -> std::io::Result<()> {
             system_id: "sword",
             system_name: "剑修",
             realm_name: "剑侠",
-            realm_index: 3,
             progress: cultivation_progress,
             power: combat.power,
         },

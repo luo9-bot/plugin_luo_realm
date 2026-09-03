@@ -10,7 +10,6 @@ pub struct ProfileRenderData<'a> {
     pub system_id: &'a str,
     pub system_name: &'a str,
     pub realm_name: &'a str,
-    pub realm_index: u32,
     pub progress: u64,
     pub power: f64,
 }

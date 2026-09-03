@@ -79,14 +79,6 @@ impl RealmAssets {
             .collect()
     }
 
-    pub fn realm_badge(&self, realm_index: u32) -> Option<DynamicImage> {
-        let path = self
-            .root
-            .join("realm_badges")
-            .join(format!("{}.png", realm_index.min(9)));
-        image::open(path).ok()
-    }
-
     /// 装备图标：按物品定义确定性挑选，同一定义始终得到同一张图。
     pub fn equipment_icon(&self, definition_id: &str) -> Option<DynamicImage> {
         let directory = self.root.join("equipment");
@@ -152,9 +144,10 @@ fn font_candidates(plugin_root: &Path) -> Vec<PathBuf> {
             .join("assets")
             .join("fonts")
             .join("font.ttf"),
+        // 衬线字形与「洛界典籍」的黑金卡面更契合，故宋体优先于黑体。
+        PathBuf::from(r"C:\Windows\Fonts\simsun.ttc"),
         PathBuf::from(r"C:\Windows\Fonts\msyh.ttc"),
         PathBuf::from(r"C:\Windows\Fonts\simhei.ttf"),
-        PathBuf::from(r"C:\Windows\Fonts\simsun.ttc"),
     ]
     .into()
 }

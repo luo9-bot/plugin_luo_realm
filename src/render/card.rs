@@ -1,33 +1,540 @@
-//! 群内图片卡片：共享绘图原语与菜单、体系、技能、装备、机缘、世界事件卡片。
+//! 群内静态命令卡片：暖炭底、鎏金细线的「洛界典籍」视觉系统。
 //!
-//! 与角色卡（`profile.rs`）共用同一套视觉语言：960×540 画布、深色题头、
-//! 纸色底、体系强调色。所有文案由本视图层生成（设计方案书 23.3），渲染
-//! 失败时由命令层回退为文字，不影响权威结果。
+//! 菜单、体系、技能、装备、物品详情、机缘与世界事件卡片共用同一套
+//! 绘图原语：近单色暖炭底、极淡的山水剪影、细金线外框与角饰、
+//! 菱形分隔、大字距标题。装饰只保留细线、菱形与角饰三种，不做
+//! 色块按钮与发光效果，让文案本身成为画面主角。
+//!
+//! 角色卡（`profile.rs`）复用这些原语；战斗 GIF（`battle.rs`）保留
+//! 独立的动画视觉体系。所有文案由本视图层生成（设计方案书 23.3），
+//! 渲染失败时由命令层回退为文字，不影响权威结果。
 
-use std::{io, io::Cursor, path::Path};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    io::{self, Cursor},
+    path::Path,
+};
 
-use ab_glyph::PxScale;
+use ab_glyph::{FontArc, PxScale, PxScaleFont, ScaleFont as _};
 use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba, imageops};
-use imageproc::{drawing::draw_text_mut, rect::Rect};
+use imageproc::{
+    drawing::{
+        draw_filled_circle_mut, draw_filled_rect_mut, draw_hollow_circle_mut,
+        draw_line_segment_mut, draw_polygon_mut, draw_text_mut,
+    },
+    point::Point,
+    rect::Rect,
+};
 
 use super::assets;
 
+// ---- 画布 ----
+
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 540;
-const HEADER_HEIGHT: u32 = 58;
-const PAPER: Rgba<u8> = Rgba([244, 242, 236, 255]);
-const HEADER: Rgba<u8> = Rgba([36, 45, 40, 255]);
-const BODY_TEXT: Rgba<u8> = Rgba([45, 48, 45, 255]);
-const MUTED_TEXT: Rgba<u8> = Rgba([83, 82, 76, 255]);
-const DIVIDER: Rgba<u8> = Rgba([219, 216, 207, 255]);
-const CARD_BG: Rgba<u8> = Rgba([225, 224, 216, 255]);
-const ACCENT: Rgba<u8> = Rgba([198, 151, 42, 255]);
-const LIGHT_TEXT: Rgba<u8> = Rgba([247, 246, 241, 255]);
+/// 页面外框内缩。
+const FRAME_INSET: i32 = 16;
+/// 角饰臂长。
+const CORNER_ARM: i32 = 24;
+/// 内容左右边距。
+const LEFT: i32 = 48;
+const RIGHT: i32 = 912;
+/// 脚注基线。
+const FOOTNOTE_Y: i32 = 502;
 
-/// 渲染玩法菜单卡片。
+// ---- 调色板：暖炭与旧金 ----
+
+pub(crate) const BG: Rgba<u8> = Rgba([19, 17, 12, 255]);
+const HAZE: Rgba<u8> = Rgba([22, 19, 13, 255]);
+const HILLS_FAR: Rgba<u8> = Rgba([27, 23, 16, 255]);
+const HILLS_NEAR: Rgba<u8> = Rgba([14, 12, 8, 255]);
+const MOON_OUTER: Rgba<u8> = Rgba([28, 24, 15, 255]);
+const MOON_INNER: Rgba<u8> = Rgba([34, 29, 18, 255]);
+pub(crate) const GOLD: Rgba<u8> = Rgba([182, 154, 98, 255]);
+pub(crate) const GOLD_BRIGHT: Rgba<u8> = Rgba([217, 190, 140, 255]);
+pub(crate) const GOLD_DIM: Rgba<u8> = Rgba([110, 92, 59, 255]);
+pub(crate) const LINE_FAINT: Rgba<u8> = Rgba([52, 44, 28, 255]);
+pub(crate) const TEXT_MAIN: Rgba<u8> = Rgba([200, 178, 130, 255]);
+pub(crate) const TEXT_SUB: Rgba<u8> = Rgba([150, 131, 94, 255]);
+pub(crate) const TEXT_MUTE: Rgba<u8> = Rgba([104, 90, 64, 255]);
+const GAIN_TEXT: Rgba<u8> = Rgba([140, 176, 148, 255]);
+const TILE_BG: Rgba<u8> = Rgba([25, 21, 15, 255]);
+pub(crate) const FIGURE: Rgba<u8> = Rgba([64, 55, 36, 255]);
+
+// ---- 基础原语 ----
+
+pub(crate) fn fill(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    color: Rgba<u8>,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    draw_filled_rect_mut(
+        image,
+        Rect::at(x as i32, y as i32).of_size(width, height),
+        color,
+    );
+}
+
+/// 细横线（单像素），端点任意方向。
+fn hline(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, x0: i32, x1: i32, y: i32, color: Rgba<u8>) {
+    if x0 == x1 {
+        return;
+    }
+    let (start, end) = if x0 < x1 { (x0, x1) } else { (x1, x0) };
+    draw_line_segment_mut(
+        image,
+        (start as f32, y as f32),
+        (end as f32, y as f32),
+        color,
+    );
+}
+
+/// 细竖线（单像素），端点任意方向。
+pub(crate) fn vline(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x: i32,
+    y0: i32,
+    y1: i32,
+    color: Rgba<u8>,
+) {
+    if y0 == y1 {
+        return;
+    }
+    let (start, end) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
+    draw_line_segment_mut(
+        image,
+        (x as f32, start as f32),
+        (x as f32, end as f32),
+        color,
+    );
+}
+
+/// 实心菱形：本系统唯一的基础装饰点。
+pub(crate) fn diamond_filled(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: Rgba<u8>,
+) {
+    if radius <= 0 {
+        return;
+    }
+    let points = [
+        Point::new(cx, cy - radius),
+        Point::new(cx + radius, cy),
+        Point::new(cx, cy + radius),
+        Point::new(cx - radius, cy),
+    ];
+    draw_polygon_mut(image, &points, color);
+}
+
+/// 空心菱形：用于「未点亮」的刻度与空槽提示。
+fn diamond_hollow(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: Rgba<u8>,
+) {
+    if radius <= 0 {
+        return;
+    }
+    let corners = [
+        (cx, cy - radius),
+        (cx + radius, cy),
+        (cx, cy + radius),
+        (cx - radius, cy),
+    ];
+    for (index, &(x, y)) in corners.iter().enumerate() {
+        let (next_x, next_y) = corners[(index + 1) % corners.len()];
+        draw_line_segment_mut(
+            image,
+            (x as f32, y as f32),
+            (next_x as f32, next_y as f32),
+            color,
+        );
+    }
+}
+
+/// 细分隔线，中点缀一枚菱形。
+pub(crate) fn divider(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x0: i32,
+    x1: i32,
+    y: i32,
+    color: Rgba<u8>,
+) {
+    hline(image, x0, x1, y, LINE_FAINT);
+    diamond_filled(image, (x0 + x1) / 2, y, 3, color);
+}
+
+/// 细进度轨道：单像素轨道 + 同线填充 + 末端菱形。
+fn thin_track(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x: i32,
+    y: i32,
+    width: i32,
+    ratio: f64,
+    color: Rgba<u8>,
+) {
+    hline(image, x, x + width, y, LINE_FAINT);
+    let filled = (width as f64 * ratio.clamp(0.02, 1.0)).round() as i32;
+    if filled > 1 {
+        hline(image, x, x + filled, y, color);
+        diamond_filled(image, x + filled, y, 4, color);
+    }
+}
+
+/// 页面外框：细金线矩形 + 四角加粗角饰。
+fn frame(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>) {
+    let inset = FRAME_INSET;
+    let right = WIDTH as i32 - inset;
+    let bottom = HEIGHT as i32 - inset;
+    hline(image, inset, right, inset, GOLD_DIM);
+    hline(image, inset, right, bottom, GOLD_DIM);
+    vline(image, inset, inset, bottom, GOLD_DIM);
+    vline(image, right, inset, bottom, GOLD_DIM);
+    let corners = [
+        (inset, inset, 1, 1),
+        (right, inset, -1, 1),
+        (inset, bottom, 1, -1),
+        (right, bottom, -1, -1),
+    ];
+    for &(x, y, dx, dy) in &corners {
+        hline(image, x, x + dx * CORNER_ARM, y, GOLD);
+        hline(image, x, x + dx * CORNER_ARM, y + dy, GOLD);
+        vline(image, x + dx, y, y + dy * CORNER_ARM, GOLD);
+        vline(image, x, y, y + dy * CORNER_ARM, GOLD);
+    }
+}
+
+/// 程序化山水剪影：淡月、远山、一座五重塔与近山。
+///
+/// 剪影与底色只差几个灰阶，需在安静的屏幕上才能察觉——
+/// 它提供质感，而不是内容。
+fn scenery(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, seed: u64) {
+    fill(image, 0, 296, WIDTH, HEIGHT - 296, HAZE);
+    let moon_x = 756 + (seed % 80) as i32;
+    draw_filled_circle_mut(image, (moon_x, 92), 44, MOON_OUTER);
+    draw_filled_circle_mut(image, (moon_x, 92), 34, MOON_INNER);
+
+    let phase = |k: u32| ((seed >> (k * 8)) & 0xFF) as f32 * 0.0246;
+    for x in 0..WIDTH as i32 {
+        let t = x as f32;
+        let ridge =
+            312.0 + 28.0 * (t * 0.0085 + phase(0)).sin() + 13.0 * (t * 0.021 + phase(1)).sin();
+        for y in (ridge as i32).max(0)..HEIGHT as i32 {
+            image.put_pixel(x as u32, y as u32, HILLS_FAR);
+        }
+    }
+    pagoda(image, 166, 372);
+    for x in 0..WIDTH as i32 {
+        let t = x as f32;
+        let ridge =
+            398.0 + 24.0 * (t * 0.0063 + phase(2)).sin() + 11.0 * (t * 0.017 + phase(3)).sin();
+        for y in (ridge as i32).max(0)..HEIGHT as i32 {
+            image.put_pixel(x as u32, y as u32, HILLS_NEAR);
+        }
+    }
+}
+
+/// 五重塔剪影：逐层收窄的塔身与出檐，底部没入近山。
+fn pagoda(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, cx: i32, base: i32) {
+    for level in 0..5_i32 {
+        let level_base = base - level * 24;
+        let body_width = 44 - level * 5;
+        let eave_width = 84 - level * 11;
+        fill(
+            image,
+            (cx - body_width / 2) as u32,
+            (level_base - 18) as u32,
+            body_width as u32,
+            18,
+            HILLS_FAR,
+        );
+        fill(
+            image,
+            (cx - eave_width / 2) as u32,
+            (level_base - 24) as u32,
+            eave_width as u32,
+            6,
+            HILLS_FAR,
+        );
+    }
+    fill(
+        image,
+        (cx - 1) as u32,
+        (base - 134) as u32,
+        2,
+        14,
+        HILLS_FAR,
+    );
+}
+
+/// 以卡片名派生相位的全新底图：山水 + 外框。
+pub(crate) fn blank(seed_key: &str) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
+    let mut image = ImageBuffer::from_pixel(WIDTH, HEIGHT, BG);
+    let mut hasher = DefaultHasher::new();
+    seed_key.hash(&mut hasher);
+    scenery(&mut image, hasher.finish());
+    frame(&mut image);
+    image
+}
+
+/// 编码 PNG 并原子写盘。
+pub(crate) fn encode(path: &Path, image: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> io::Result<()> {
+    let mut bytes = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image.clone())
+        .write_to(&mut bytes, ImageFormat::Png)
+        .map_err(io::Error::other)?;
+    assets::atomic_write(path, bytes.get_ref())
+}
+
+// ---- 文本 ----
+
+pub(crate) fn label(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    font: &FontArc,
+    size: f32,
+    x: i32,
+    y: i32,
+    color: Rgba<u8>,
+    text: &str,
+) {
+    draw_text_mut(image, color, x, y, PxScale::from(size), font, text);
+}
+
+fn scaled_font(font: &FontArc, size: f32) -> PxScaleFont<FontArc> {
+    PxScaleFont {
+        font: font.clone(),
+        scale: PxScale::from(size),
+    }
+}
+
+/// 文本宽度（含额外字距）。
+pub(crate) fn text_width(font: &FontArc, size: f32, text: &str, spacing: f32) -> f32 {
+    let scaled = scaled_font(font, size);
+    let advance: f32 = text
+        .chars()
+        .map(|ch| scaled.h_advance(scaled.glyph_id(ch)))
+        .sum();
+    advance + spacing * text.chars().count().saturating_sub(1) as f32
+}
+
+/// 带额外字距的逐字绘制（空格只推进笔位）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn label_spaced(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    font: &FontArc,
+    size: f32,
+    x: i32,
+    y: i32,
+    color: Rgba<u8>,
+    text: &str,
+    spacing: f32,
+) {
+    let scaled = scaled_font(font, size);
+    let mut pen = x as f32;
+    for ch in text.chars() {
+        if ch != ' ' {
+            draw_text_mut(
+                image,
+                color,
+                pen.round() as i32,
+                y,
+                PxScale::from(size),
+                font,
+                &ch.to_string(),
+            );
+        }
+        pen += scaled.h_advance(scaled.glyph_id(ch)) + spacing;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn label_centered(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    font: &FontArc,
+    size: f32,
+    cx: i32,
+    y: i32,
+    color: Rgba<u8>,
+    text: &str,
+    spacing: f32,
+) {
+    let width = text_width(font, size, text, spacing);
+    label_spaced(
+        image,
+        font,
+        size,
+        (cx as f32 - width / 2.0).round() as i32,
+        y,
+        color,
+        text,
+        spacing,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn label_right(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    font: &FontArc,
+    size: f32,
+    right: i32,
+    y: i32,
+    color: Rgba<u8>,
+    text: &str,
+    spacing: f32,
+) {
+    let width = text_width(font, size, text, spacing);
+    label_spaced(
+        image,
+        font,
+        size,
+        (right as f32 - width).round() as i32,
+        y,
+        color,
+        text,
+        spacing,
+    );
+}
+
+/// 页首标题带：居中大字距标题，两侧细线收进边框，线端各缀一枚菱形。
+fn title_band(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    font: Option<&FontArc>,
+    title: &str,
+    cy: i32,
+) {
+    let Some(font) = font else {
+        hline(image, 52, 384, cy - 6, GOLD_DIM);
+        hline(image, 576, 908, cy - 6, GOLD_DIM);
+        return;
+    };
+    let center = WIDTH as i32 / 2;
+    let width = text_width(font, 28.0, title, 8.0);
+    label_spaced(
+        image,
+        font,
+        28.0,
+        (center as f32 - width / 2.0).round() as i32,
+        cy - 20,
+        GOLD_BRIGHT,
+        title,
+        8.0,
+    );
+    let gap = (width / 2.0 + 34.0).round() as i32;
+    hline(image, 52, center - gap, cy - 6, GOLD_DIM);
+    hline(image, center + gap, 908, cy - 6, GOLD_DIM);
+    diamond_filled(image, center - gap, cy - 6, 3, GOLD);
+    diamond_filled(image, center + gap, cy - 6, 3, GOLD);
+}
+
+/// 页脚提示：一行暗金小字。
+fn footnote(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, font: Option<&FontArc>, text: &str) {
+    if let Some(font) = font {
+        label_centered(
+            image,
+            font,
+            14.0,
+            WIDTH as i32 / 2,
+            FOOTNOTE_Y,
+            TEXT_MUTE,
+            text,
+            3.0,
+        );
+    }
+}
+
+// ---- 线性图标 ----
+
+/// 角色数值列的圆圈简笔图标。
+#[derive(Clone, Copy)]
+pub(crate) enum StatGlyph {
+    /// 打坐人形：修为。
+    Meditate,
+    /// 交叉双剑：战力。
+    Swords,
+    /// 铜钱：金币。
+    Coin,
+}
+
+/// 细线圆圈 + 圈内简笔图形。
+pub(crate) fn ring_icon(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: Rgba<u8>,
+    glyph: StatGlyph,
+) {
+    draw_hollow_circle_mut(image, (cx, cy), radius, color);
+    match glyph {
+        StatGlyph::Meditate => {
+            draw_filled_circle_mut(image, (cx, cy - 8), 4, color);
+            let body = [
+                Point::new(cx - 12, cy + 12),
+                Point::new(cx + 12, cy + 12),
+                Point::new(cx, cy - 3),
+            ];
+            draw_polygon_mut(image, &body, color);
+            hline(image, cx - 17, cx + 17, cy + 15, color);
+        }
+        StatGlyph::Swords => {
+            draw_line_segment_mut(
+                image,
+                ((cx - 11) as f32, (cy - 11) as f32),
+                ((cx + 11) as f32, (cy + 11) as f32),
+                color,
+            );
+            draw_line_segment_mut(
+                image,
+                ((cx + 11) as f32, (cy - 11) as f32),
+                ((cx - 11) as f32, (cy + 11) as f32),
+                color,
+            );
+            draw_line_segment_mut(
+                image,
+                ((cx - 13) as f32, (cy + 5) as f32),
+                ((cx - 5) as f32, (cy + 13) as f32),
+                color,
+            );
+            draw_line_segment_mut(
+                image,
+                ((cx + 5) as f32, (cy + 13) as f32),
+                ((cx + 13) as f32, (cy + 5) as f32),
+                color,
+            );
+        }
+        StatGlyph::Coin => {
+            draw_hollow_circle_mut(image, (cx, cy), 13, color);
+            let half = 5;
+            hline(image, cx - half, cx + half, cy - half, color);
+            hline(image, cx - half, cx + half, cy + half, color);
+            vline(image, cx - half, cy - half, cy + half, color);
+            vline(image, cx + half, cy - half, cy + half, color);
+        }
+    }
+}
+
+// ---- 玩法菜单 ----
+
+/// 渲染玩法菜单：四个分区行，分区名与指令以表格细线分隔。
 pub fn menu(root: &Path, path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
-    let mut image = blank();
+    let mut image = blank("menu");
+    title_band(&mut image, assets.font(), "洛界 · 玩法", 60);
+
+    const SECTION_SPLIT: i32 = 186;
+    const ROW_BOUNDS: [i32; 5] = [100, 197, 293, 390, 486];
     let sections: [(&str, &[&str]); 4] = [
         (
             "初入此界",
@@ -46,37 +553,71 @@ pub fn menu(root: &Path, path: &Path) -> io::Result<()> {
             &["战力", "决斗 <QQ>", "御空试炼", "兑换 <兑换码>"],
         ),
     ];
-    let positions: [(i32, i32); 4] = [(36, 92), (492, 92), (36, 306), (492, 306)];
-    for ((title, items), (x, y)) in sections.into_iter().zip(positions) {
-        fill(&mut image, x as u32, y as u32, 432, 198, CARD_BG);
-        fill(&mut image, x as u32, y as u32, 6, 198, ACCENT);
-        if let Some(font) = assets.font() {
-            label(
+
+    hline(&mut image, LEFT, RIGHT, ROW_BOUNDS[0], GOLD_DIM);
+    hline(&mut image, LEFT, RIGHT, ROW_BOUNDS[4], GOLD_DIM);
+    vline(&mut image, LEFT, ROW_BOUNDS[0], ROW_BOUNDS[4], GOLD_DIM);
+    vline(&mut image, RIGHT, ROW_BOUNDS[0], ROW_BOUNDS[4], GOLD_DIM);
+    vline(
+        &mut image,
+        SECTION_SPLIT,
+        ROW_BOUNDS[0],
+        ROW_BOUNDS[4],
+        GOLD_DIM,
+    );
+    for &row_y in &ROW_BOUNDS[1..4] {
+        hline(&mut image, LEFT, RIGHT, row_y, LINE_FAINT);
+        diamond_filled(&mut image, SECTION_SPLIT, row_y, 3, GOLD);
+    }
+
+    if let Some(font) = assets.font() {
+        for (index, (title, items)) in sections.into_iter().enumerate() {
+            let row_top = ROW_BOUNDS[index];
+            let row_bottom = ROW_BOUNDS[index + 1];
+            label_centered(
                 &mut image,
                 font,
-                24.0,
-                x + 26,
-                y + 18,
-                HEADER,
-                &format!("【{title}】"),
+                21.0,
+                (LEFT + SECTION_SPLIT) / 2,
+                row_top + 37,
+                GOLD_BRIGHT,
+                title,
+                3.0,
             );
-            for (index, item) in items.iter().enumerate() {
-                let column = (index % 2) as i32;
-                let row = (index / 2) as i32;
-                label(
+            let columns = items.len();
+            let column_width = (RIGHT - SECTION_SPLIT) / columns as i32;
+            for (column, item) in items.iter().enumerate() {
+                let column_x = SECTION_SPLIT + column as i32 * column_width;
+                if column > 0 {
+                    vline(
+                        &mut image,
+                        column_x,
+                        row_top + 18,
+                        row_bottom - 18,
+                        LINE_FAINT,
+                    );
+                    for &row_y in &ROW_BOUNDS[1..4] {
+                        diamond_filled(&mut image, column_x, row_y, 3, GOLD);
+                    }
+                }
+                label_centered(
                     &mut image,
                     font,
-                    19.0,
-                    x + 26 + column * 204,
-                    y + 74 + row * 42,
-                    BODY_TEXT,
+                    18.0,
+                    column_x + column_width / 2,
+                    row_top + 39,
+                    TEXT_MAIN,
                     item,
+                    2.0,
                 );
             }
         }
     }
-    finish(&assets, &mut image, "LUO REALM / 玩法菜单", None, path)
+    footnote(&mut image, assets.font(), "以上指令在群内直接发送即可");
+    encode(path, &image)
 }
+
+// ---- 修行体系 ----
 
 /// 修行体系卡片数据：由命令层从体系注册表组装。
 pub struct SystemCardEntry {
@@ -103,46 +644,66 @@ pub fn system_positioning(id: &str) -> &'static str {
     }
 }
 
-/// 渲染修行体系总览卡片。
+/// 渲染修行体系总览：双列六行的细线表格，体系色只落在名称前的菱形上。
 pub fn systems(root: &Path, entries: &[SystemCardEntry], path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
-    let mut image = blank();
-    for (index, entry) in entries.iter().enumerate() {
-        let column = (index % 2) as u32;
-        let row = (index / 2) as u32;
-        let x = 36 + column * 456;
-        let y = 76 + row * 72;
-        fill(&mut image, x, y, 432, 62, CARD_BG);
-        fill(&mut image, x, y, 6, 62, system_color(&entry.id));
-        if let Some(font) = assets.font() {
+    let mut image = blank("systems");
+    title_band(&mut image, assets.font(), "修行体系", 60);
+
+    const MIDDLE: i32 = 480;
+    const ROW_BOUNDS: [i32; 7] = [100, 164, 228, 292, 356, 420, 486];
+    hline(&mut image, LEFT, RIGHT, ROW_BOUNDS[0], GOLD_DIM);
+    hline(&mut image, LEFT, RIGHT, ROW_BOUNDS[6], GOLD_DIM);
+    vline(&mut image, LEFT, ROW_BOUNDS[0], ROW_BOUNDS[6], GOLD_DIM);
+    vline(&mut image, RIGHT, ROW_BOUNDS[0], ROW_BOUNDS[6], GOLD_DIM);
+    vline(&mut image, MIDDLE, ROW_BOUNDS[0], ROW_BOUNDS[6], GOLD_DIM);
+    for &row_y in &ROW_BOUNDS[1..6] {
+        hline(&mut image, LEFT, MIDDLE, row_y, LINE_FAINT);
+        hline(&mut image, MIDDLE, RIGHT, row_y, LINE_FAINT);
+    }
+
+    if let Some(font) = assets.font() {
+        for (index, entry) in entries.iter().enumerate().take(12) {
+            let column = index % 2;
+            let row = index / 2;
+            let x0 = if column == 0 { LEFT } else { MIDDLE };
+            let row_top = ROW_BOUNDS[row];
+            diamond_filled(
+                &mut image,
+                x0 + 34,
+                row_top + 24,
+                4,
+                system_color(&entry.id),
+            );
             label(
                 &mut image,
                 font,
-                23.0,
-                x as i32 + 22,
-                y as i32 + 6,
-                HEADER,
+                20.0,
+                x0 + 56,
+                row_top + 13,
+                GOLD_BRIGHT,
                 &entry.name,
             );
             label(
                 &mut image,
                 font,
-                15.0,
-                x as i32 + 22,
-                y as i32 + 36,
-                MUTED_TEXT,
+                13.0,
+                x0 + 56,
+                row_top + 40,
+                TEXT_SUB,
                 &format!("{} · {}", entry.id, entry.positioning),
             );
         }
     }
-    finish(
-        &assets,
+    footnote(
         &mut image,
-        "LUO REALM / 修行体系",
-        Some("选择体系 <名称或标识>，体系一经确定不可更改"),
-        path,
-    )
+        assets.font(),
+        "选择体系 <名称或标识>，体系一经确定不可更改",
+    );
+    encode(path, &image)
 }
+
+// ---- 技能 ----
 
 /// 技能卡片数据。
 pub struct SkillCardData<'a> {
@@ -153,69 +714,70 @@ pub struct SkillCardData<'a> {
     pub skills: &'a [(String, u8)],
 }
 
-/// 渲染技能卡片：名称行 + 熟练度刻度。
+/// 渲染技能卡片：技能名 + 菱形熟练度刻度。
 pub fn skills(root: &Path, data: &SkillCardData<'_>, path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
     let accent = system_color(data.system_id);
-    let mut image = blank();
-    fill(
-        &mut image,
-        0,
-        HEADER_HEIGHT,
-        16,
-        HEIGHT - HEADER_HEIGHT,
-        accent,
-    );
-    fill(&mut image, 36, 92, WIDTH - 72, HEIGHT - 128, CARD_BG);
+    let mut image = blank("skills");
+    title_band(&mut image, assets.font(), "技艺", 60);
+
     if let Some(font) = assets.font() {
-        label(&mut image, font, 30.0, 64, 112, HEADER, data.display_name);
         label(
             &mut image,
             font,
-            20.0,
+            26.0,
             64,
-            154,
-            accent,
-            &format!("{} · 当前战术：{}", data.system_name, data.tactic_name),
+            104,
+            GOLD_BRIGHT,
+            data.display_name,
         );
+        label_right(
+            &mut image,
+            font,
+            16.0,
+            896,
+            112,
+            accent,
+            &format!("{} · 战术 {}", data.system_name, data.tactic_name),
+            2.0,
+        );
+        divider(&mut image, 64, 896, 148, GOLD);
         for (index, (name, mastery)) in data.skills.iter().enumerate().take(8) {
-            let y = 204 + index as i32 * 36;
-            label(&mut image, font, 20.0, 64, y, BODY_TEXT, name);
+            let row_top = 166 + index as i32 * 40;
+            label(&mut image, font, 19.0, 64, row_top + 9, TEXT_MAIN, name);
             for pip in 0..3_u8 {
-                let pip_color = if *mastery > pip { accent } else { DIVIDER };
-                fill(
-                    &mut image,
-                    700 + pip as u32 * 26,
-                    y as u32 + 8,
-                    16,
-                    16,
-                    pip_color,
-                );
+                let pip_x = 690 + pip as i32 * 38;
+                if *mastery > pip {
+                    diamond_filled(&mut image, pip_x, row_top + 18, 7, accent);
+                } else {
+                    diamond_hollow(&mut image, pip_x, row_top + 18, 7, LINE_FAINT);
+                }
             }
             label(
                 &mut image,
                 font,
-                15.0,
-                794,
-                y + 1,
-                MUTED_TEXT,
+                14.0,
+                800,
+                row_top + 12,
+                TEXT_MUTE,
                 &format!("{mastery}/3"),
             );
+            if index < 7 {
+                hline(&mut image, 64, 896, row_top + 40, LINE_FAINT);
+            }
         }
         if data.skills.len() > 8 {
-            label(
+            footnote(
                 &mut image,
-                font,
-                15.0,
-                64,
-                HEIGHT as i32 - 66,
-                MUTED_TEXT,
-                &format!("其余 {} 项技能已略，详情见网页档案", data.skills.len() - 8),
+                Some(font),
+                &format!("其余 {} 项技能已略，详见网页档案", data.skills.len() - 8),
             );
         }
     }
-    finish(&assets, &mut image, "LUO REALM / 技能", None, path)
+    encode(path, &image)
 }
+
+// ---- 装备 ----
 
 /// 装备卡片数据。
 pub struct EquipmentCardData<'a> {
@@ -253,169 +815,156 @@ const SLOT_ORDER: [(&str, &str); 8] = [
     ("accessory_2", "饰品二"),
 ];
 
-const PANEL_DARK: Rgba<u8> = Rgba([26, 31, 38, 255]);
-const TILE_DARK: Rgba<u8> = Rgba([16, 20, 26, 255]);
-const TILE_EMPTY: Rgba<u8> = Rgba([38, 45, 54, 255]);
-
-/// 品阶解析：从规则注册表读取色环、星数与显示名。
-///
-/// 品阶表来自 `data/luo_realm/rules/rarities.toml`（可整体覆盖）或内置
-/// 默认；本模块不关心品阶会套在什么物品上，只按品质代码取外观。
-fn tier_of(root: &Path, quality: &str) -> (Rgba<u8>, usize, String) {
-    let tiers = crate::domain::rules::rarity_tiers(root);
-    match crate::domain::rules::rarity_by_code(&tiers, quality) {
-        Some(tier) => {
-            let (red, green, blue) = tier.rgb();
-            (
-                Rgba([red, green, blue, 255]),
-                tier.stars as usize,
-                tier.display.clone(),
-            )
-        }
-        None => (Rgba([112, 118, 124, 255]), 1, "普通".into()),
-    }
+/// 物品格细框。
+fn tile_frame(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x: i32,
+    y: i32,
+    size: i32,
+    color: Rgba<u8>,
+) {
+    hline(image, x, x + size, y, color);
+    hline(image, x, x + size, y + size, color);
+    vline(image, x, y, y + size, color);
+    vline(image, x + size, y, y + size, color);
 }
 
-/// 深色面板上的次级文字色。
-const PANEL_TEXT: Rgba<u8> = Rgba([196, 203, 212, 255]);
-
-/// 词条代码的中文显示名。
-pub(crate) fn modifier_name(code: &str) -> &str {
-    match code {
-        "max_health" => "生命",
-        "attack" => "攻击",
-        "physical_defense" => "物防",
-        "arcane_defense" => "法防",
-        "soul_defense" => "魂防",
-        "speed" => "速度",
-        "critical_rate" => "暴击",
-        _ => code,
-    }
-}
-
-/// 画一个物品格：深色底 + 稀有度色环 + 居中图标（缺失时画首字）。
+/// 深底面板上的物品格：细金框 + 底部稀有度色条 + 居中图标（缺失时画首字）。
 #[allow(clippy::too_many_arguments)]
 fn item_tile(
-    assets: &assets::RealmAssets,
     image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
-    x: u32,
-    y: u32,
-    size: u32,
+    font: &FontArc,
+    x: i32,
+    y: i32,
+    size: i32,
     ring: Rgba<u8>,
     icon: Option<DynamicImage>,
     glyph: &str,
 ) {
-    fill(image, x, y, size, size, TILE_DARK);
-    let border = 3;
-    fill(image, x, y, size, border, ring);
-    fill(image, x, y + size - border, size, border, ring);
-    fill(image, x, y, border, size, ring);
-    fill(image, x + size - border, y, border, size, ring);
-    let inner = size - 14;
-    if let Some(resized) =
-        icon.map(|icon| icon.resize_exact(inner, inner, image::imageops::FilterType::Lanczos3))
-    {
-        imageops::overlay(image, &resized, (x + 7) as i64, (y + 7) as i64);
-    } else if let Some(font) = assets.font() {
-        let offset = (glyph.chars().count() as i32) * (size as i32) / 4;
-        label(
-            image,
-            font,
-            size as f32 * 0.52,
-            x as i32 + size as i32 / 2 - offset,
-            y as i32 + size as i32 / 3,
-            MUTED_TEXT,
-            glyph,
-        );
+    fill(image, x as u32, y as u32, size as u32, size as u32, TILE_BG);
+    tile_frame(image, x, y, size, GOLD_DIM);
+    fill(
+        image,
+        (x + 4) as u32,
+        (y + size - 8) as u32,
+        (size - 8) as u32,
+        3,
+        ring,
+    );
+    let icon_size = (size as u32 * 3 / 4).max(8);
+    match icon.map(|icon| icon.resize(icon_size, icon_size, imageops::FilterType::Lanczos3)) {
+        Some(resized) => {
+            let offset = (size - resized.width() as i32) / 2;
+            imageops::overlay(
+                image,
+                &resized,
+                (x + offset) as i64,
+                (y + offset - 2) as i64,
+            );
+        }
+        None => {
+            let offset = (glyph.chars().count() as i32) * size / 4;
+            label(
+                image,
+                font,
+                size as f32 * 0.5,
+                x + size / 2 - offset,
+                y + size / 3,
+                TEXT_SUB,
+                glyph,
+            );
+        }
     }
 }
 
-/// 渲染装备卡片：八个槽位徽章 + 背包网格，图标来自素材库。
+/// 渲染装备卡片：八个槽位徽章与背包，稀有度只落在底条上。
 pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
     let accent = system_color(data.system_id);
-    let mut image = blank();
-    fill(
-        &mut image,
-        0,
-        HEADER_HEIGHT,
-        16,
-        HEIGHT - HEADER_HEIGHT,
-        accent,
-    );
-    fill(&mut image, 36, 92, WIDTH - 72, 268, PANEL_DARK);
-    fill(&mut image, 36, 376, WIDTH - 72, 128, PANEL_DARK);
+    let mut image = blank("equipment");
+    title_band(&mut image, assets.font(), "行装", 60);
+
     if let Some(font) = assets.font() {
         label(
             &mut image,
             font,
-            30.0,
+            26.0,
             64,
-            112,
-            LIGHT_TEXT,
+            104,
+            GOLD_BRIGHT,
             data.display_name,
         );
-        label(
+        label_right(
             &mut image,
             font,
-            20.0,
-            64,
-            154,
+            16.0,
+            896,
+            112,
             accent,
-            &format!("{} · 装备栏 · 装备 查看 <编号> 看详情", data.system_name),
+            &format!("{} · 装备栏", data.system_name),
+            2.0,
         );
+        divider(&mut image, 64, 896, 148, GOLD);
+
         for (index, (slot_code, slot_name)) in SLOT_ORDER.into_iter().enumerate() {
-            let x = 72 + index as u32 * 106;
+            let x = 64 + index as i32 * 100;
             let slot = data
                 .equipped
                 .iter()
                 .find(|slot| slot.slot_code == slot_code);
-            let (ring, icon, glyph) = match slot {
+            match slot {
                 Some(slot) => {
                     let (ring, _, _) = tier_of(root, &slot.quality);
-                    (
+                    item_tile(
+                        &mut image,
+                        font,
+                        x,
+                        166,
+                        78,
                         ring,
                         assets.equipment_icon(&slot.item_name),
-                        slot.item_name.chars().next().unwrap_or('器').to_string(),
-                    )
+                        &slot.item_name.chars().next().unwrap_or('器').to_string(),
+                    );
+                    label(
+                        &mut image,
+                        font,
+                        12.0,
+                        x,
+                        252,
+                        TEXT_MAIN,
+                        &truncate_name(&slot.item_name, 7),
+                    );
                 }
-                None => (TILE_EMPTY, None, String::new()),
-            };
-            item_tile(&assets, &mut image, x, 200, 88, ring, icon, &glyph);
+                None => {
+                    tile_frame(&mut image, x, 166, 78, LINE_FAINT);
+                    diamond_hollow(&mut image, x + 39, 205, 10, LINE_FAINT);
+                }
+            }
             label(
                 &mut image,
                 font,
-                15.0,
-                x as i32 + 4,
-                294,
-                MUTED_TEXT,
+                12.0,
+                x,
+                slot_name_y(slot.is_some()),
+                TEXT_MUTE,
                 slot_name,
             );
-            if let Some(slot) = slot {
-                label(
-                    &mut image,
-                    font,
-                    14.0,
-                    x as i32 + 4,
-                    318,
-                    LIGHT_TEXT,
-                    &truncate_name(&slot.item_name, 6),
-                );
-            }
         }
-        label(&mut image, font, 20.0, 64, 394, LIGHT_TEXT, "背包");
+
+        divider(&mut image, 64, 896, 306, GOLD);
+        label(&mut image, font, 17.0, 64, 322, GOLD_BRIGHT, "背包");
         if data.bag.is_empty() {
-            label(&mut image, font, 16.0, 150, 394, MUTED_TEXT, "暂无其他物品");
+            label(&mut image, font, 14.0, 150, 330, TEXT_MUTE, "暂无其他物品");
         }
         for (index, item) in data.bag.iter().enumerate().take(7) {
-            let x = 150 + index as u32 * 100;
+            let x = 150 + index as i32 * 92;
             let (ring, _, _) = tier_of(root, &item.quality);
             item_tile(
-                &assets,
                 &mut image,
+                font,
                 x,
-                376 + 20,
-                64,
+                354,
+                56,
                 ring,
                 assets.equipment_icon(&item.name),
                 &item.name.chars().next().unwrap_or('物').to_string(),
@@ -423,10 +972,10 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
             label(
                 &mut image,
                 font,
-                13.0,
-                x as i32,
-                464,
-                LIGHT_TEXT,
+                12.0,
+                x,
+                418,
+                TEXT_SUB,
                 &format!("×{}", item.quantity),
             );
         }
@@ -435,14 +984,20 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
                 &mut image,
                 font,
                 14.0,
-                150 + 7 * 100,
-                404,
-                MUTED_TEXT,
+                150 + 7 * 92,
+                376,
+                TEXT_SUB,
                 &format!("+{}", data.bag.len() - 7),
             );
         }
     }
-    finish(&assets, &mut image, "LUO REALM / 装备", None, path)
+    footnote(&mut image, assets.font(), "装备 查看 <编号> 查看物品详情");
+    encode(path, &image)
+}
+
+/// 槽位名的纵坐标：已装备格下方让位给物品名，空格则紧贴格底。
+fn slot_name_y(occupied: bool) -> i32 {
+    if occupied { 270 } else { 252 }
 }
 
 fn truncate_name(name: &str, limit: usize) -> String {
@@ -454,6 +1009,8 @@ fn truncate_name(name: &str, limit: usize) -> String {
         truncated
     }
 }
+
+// ---- 物品详情 ----
 
 /// 物品详情卡片数据（`装备 查看 <编号>`）。
 pub struct ItemDetailData<'a> {
@@ -474,50 +1031,20 @@ fn slot_display_name(slot_code: &str) -> &str {
         .unwrap_or(slot_code)
 }
 
-/// 渲染物品详情卡片：稀有度名条 + 图标 + 词条列表。
+/// 渲染物品详情：左侧器物徽记，右侧词条清单。
 pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
     let (ring, stars, rarity_name) = tier_of(root, data.quality);
-    let mut image = blank();
-    fill(
-        &mut image,
-        0,
-        HEADER_HEIGHT,
-        16,
-        HEIGHT - HEADER_HEIGHT,
-        ring,
-    );
-    fill(&mut image, 36, 92, 320, 412, PANEL_DARK);
-    fill(&mut image, 372, 92, WIDTH - 408, 412, PANEL_DARK);
-    fill(&mut image, 36, 92, 320, 8, ring);
+    let mut image = blank("item_detail");
+    title_band(&mut image, assets.font(), "器物", 60);
+
     if let Some(font) = assets.font() {
-        label(
+        item_tile(
             &mut image,
             font,
-            24.0,
-            56,
-            116,
-            LIGHT_TEXT,
-            &truncate_name(data.definition_id, 9),
-        );
-        label(&mut image, font, 16.0, 56, 152, ring, rarity_name.as_str());
-        for star in 0..stars {
-            label(
-                &mut image,
-                font,
-                18.0,
-                56 + star as i32 * 24,
-                178,
-                Rgba([232, 190, 92, 255]),
-                "★",
-            );
-        }
-        item_tile(
-            &assets,
-            &mut image,
-            118,
-            218,
-            156,
+            122,
+            108,
+            148,
             ring,
             assets.equipment_icon(data.definition_id),
             &data
@@ -527,59 +1054,68 @@ pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::R
                 .unwrap_or('器')
                 .to_string(),
         );
-        if let Some(slot) = data.equipped_slot {
-            label(
-                &mut image,
-                font,
-                15.0,
-                56,
-                396,
-                MUTED_TEXT,
-                &format!("已装备 · {}", slot_display_name(slot)),
-            );
-        } else {
-            label(&mut image, font, 15.0, 56, 396, MUTED_TEXT, "未装备");
-        }
-        label(
+        label_centered(
             &mut image,
             font,
-            15.0,
-            56,
-            424,
-            MUTED_TEXT,
+            21.0,
+            196,
+            278,
+            GOLD_BRIGHT,
+            &truncate_name(data.definition_id, 9),
+            2.0,
+        );
+        let star_start = 196 - (stars.max(1) as i32 - 1) * 11;
+        for star in 0..stars.max(1) {
+            diamond_filled(&mut image, star_start + star as i32 * 22, 318, 5, ring);
+        }
+        label_centered(&mut image, font, 14.0, 196, 336, ring, &rarity_name, 2.0);
+        let state = match data.equipped_slot {
+            Some(slot) => format!("已装备 · {}", slot_display_name(slot)),
+            None => "未装备".to_owned(),
+        };
+        label_centered(&mut image, font, 14.0, 196, 372, TEXT_SUB, &state, 2.0);
+        label_centered(
+            &mut image,
+            font,
+            13.0,
+            196,
+            396,
+            TEXT_MUTE,
             &format!("编号 #{}", data.item_id),
+            2.0,
         );
 
-        label(&mut image, font, 26.0, 404, 116, LIGHT_TEXT, "物品详情");
+        vline(&mut image, 368, 108, 430, LINE_FAINT);
         label(
             &mut image,
             font,
-            17.0,
-            404,
-            162,
-            MUTED_TEXT,
-            &format!("强化等级 +{} · 持有 {}", data.level, data.quantity),
+            16.0,
+            400,
+            112,
+            TEXT_SUB,
+            &format!("强化 +{} · 持有 {}", data.level, data.quantity),
         );
+        divider(&mut image, 400, 896, 148, GOLD);
         if data.modifiers.is_empty() {
             label(
                 &mut image,
                 font,
-                18.0,
-                404,
-                220,
-                MUTED_TEXT,
+                16.0,
+                400,
+                190,
+                TEXT_MUTE,
                 "暂无词条加成。",
             );
         }
         for (index, (code, value)) in data.modifiers.iter().enumerate().take(7) {
-            let y = 214 + index as i32 * 40;
+            let y = 176 + index as i32 * 42;
             label(
                 &mut image,
                 font,
-                19.0,
-                404,
+                18.0,
+                400,
                 y,
-                PANEL_TEXT,
+                TEXT_MAIN,
                 modifier_name(code),
             );
             let display = if *value >= 0 {
@@ -587,28 +1123,21 @@ pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::R
             } else {
                 value.to_string()
             };
-            label(
-                &mut image,
-                font,
-                19.0,
-                700,
-                y,
-                Rgba([126, 196, 158, 255]),
-                &display,
-            );
+            label_right(&mut image, font, 18.0, 896, y, GAIN_TEXT, &display, 1.0);
+            if index < data.modifiers.len().min(7) - 1 {
+                hline(&mut image, 400, 896, y + 32, LINE_FAINT);
+            }
         }
-        label(
-            &mut image,
-            font,
-            15.0,
-            404,
-            HEIGHT as i32 - 66,
-            MUTED_TEXT,
-            "穿戴：装备 穿戴 <编号> <槽位> · 卸下：装备 卸下 <槽位>",
-        );
     }
-    finish(&assets, &mut image, "LUO REALM / 物品详情", None, path)
+    footnote(
+        &mut image,
+        assets.font(),
+        "装备 穿戴 <编号> <槽位> · 装备 卸下 <槽位>",
+    );
+    encode(path, &image)
 }
+
+// ---- 机缘 ----
 
 /// 机缘卡片数据。
 pub struct DestinyCardData<'a> {
@@ -617,55 +1146,51 @@ pub struct DestinyCardData<'a> {
     pub world_event_line: Option<&'a str>,
 }
 
-/// 渲染每日机缘卡片。
+/// 渲染每日机缘：中央大字机缘名 + 一线一菱 + 描述。
 pub fn destiny(root: &Path, data: &DestinyCardData<'_>, path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
-    let mut image = blank();
-    fill(
-        &mut image,
-        0,
-        HEADER_HEIGHT,
-        16,
-        HEIGHT - HEADER_HEIGHT,
-        ACCENT,
-    );
-    fill(&mut image, 36, 120, WIDTH - 72, 300, CARD_BG);
+    let mut image = blank("destiny");
+    title_band(&mut image, assets.font(), "今日机缘", 64);
+
     if let Some(font) = assets.font() {
-        let offset = (data.destiny_name.chars().count() as i32) * 19;
-        label(
+        label_centered(
             &mut image,
             font,
             38.0,
-            WIDTH as i32 / 2 - offset,
-            190,
-            HEADER,
+            WIDTH as i32 / 2,
+            180,
+            GOLD_BRIGHT,
             data.destiny_name,
+            10.0,
         );
-        fill(&mut image, WIDTH / 2 - 90, 256, 180, 3, ACCENT);
-        let text_offset = (data.description.chars().count() as i32) * 11;
-        label(
+        divider(&mut image, 330, 630, 256, GOLD);
+        label_centered(
             &mut image,
             font,
-            22.0,
-            WIDTH as i32 / 2 - text_offset,
-            296,
-            BODY_TEXT,
+            19.0,
+            WIDTH as i32 / 2,
+            290,
+            TEXT_MAIN,
             data.description,
+            3.0,
         );
         if let Some(line) = data.world_event_line {
-            label(
+            label_centered(
                 &mut image,
                 font,
-                17.0,
-                64,
-                HEIGHT as i32 - 96,
-                MUTED_TEXT,
+                14.0,
+                WIDTH as i32 / 2,
+                448,
+                TEXT_MUTE,
                 line,
+                2.0,
             );
         }
     }
-    finish(&assets, &mut image, "LUO REALM / 今日机缘", None, path)
+    encode(path, &image)
 }
+
+// ---- 世界事件 ----
 
 /// 世界事件卡片数据。
 pub struct WorldEventCardData<'a> {
@@ -678,174 +1203,132 @@ pub struct WorldEventCardData<'a> {
     pub objectives: &'a [(String, i64, i64)],
 }
 
-/// 渲染世界事件卡片：事件说明 + 目标进度条。
+/// 渲染世界事件：事件名 + 状态徽记 + 目标进度轨道。
 pub fn world_event(root: &Path, data: &WorldEventCardData<'_>, path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
-    let status_color = if data.completed {
-        Rgba([36, 139, 91, 255])
-    } else {
-        ACCENT
-    };
-    let mut image = blank();
-    fill(
-        &mut image,
-        0,
-        HEADER_HEIGHT,
-        16,
-        HEIGHT - HEADER_HEIGHT,
-        status_color,
-    );
-    fill(&mut image, 36, 92, WIDTH - 72, HEIGHT - 128, CARD_BG);
+    let accent = if data.completed { GOLD_BRIGHT } else { GOLD };
+    let mut image = blank("world_event");
+    title_band(&mut image, assets.font(), "世界事件", 60);
+
     if let Some(font) = assets.font() {
-        label(&mut image, font, 30.0, 64, 112, HEADER, data.event_name);
-        fill(&mut image, 700, 120, 190, 34, status_color);
-        label(&mut image, font, 18.0, 742, 126, LIGHT_TEXT, data.status);
         label(
             &mut image,
             font,
-            19.0,
+            25.0,
             64,
-            166,
-            MUTED_TEXT,
-            data.description,
+            106,
+            GOLD_BRIGHT,
+            data.event_name,
         );
+        let badge_width = text_width(font, 14.0, data.status, 2.0) as i32 + 36;
+        let badge_x1 = 896;
+        let badge_x0 = badge_x1 - badge_width;
+        let badge_line = if data.completed { GOLD } else { GOLD_DIM };
+        hline(&mut image, badge_x0, badge_x1, 104, badge_line);
+        hline(&mut image, badge_x0, badge_x1, 136, badge_line);
+        vline(&mut image, badge_x0, 104, 136, badge_line);
+        vline(&mut image, badge_x1, 104, 136, badge_line);
+        label_centered(
+            &mut image,
+            font,
+            14.0,
+            (badge_x0 + badge_x1) / 2,
+            112,
+            accent,
+            data.status,
+            2.0,
+        );
+        label(&mut image, font, 16.0, 64, 156, TEXT_SUB, data.description);
+        divider(&mut image, 64, 896, 200, GOLD);
         for (index, (objective, current, target)) in data.objectives.iter().enumerate().take(3) {
-            let y = 222 + index as i32 * 76;
-            label(&mut image, font, 19.0, 64, y, BODY_TEXT, objective);
-            fill(&mut image, 64, y as u32 + 34, 832, 12, DIVIDER);
+            let y = 222 + index as i32 * 82;
+            label(&mut image, font, 18.0, 64, y, TEXT_MAIN, objective);
             let ratio = if *target > 0 {
-                (*current as f64 / *target as f64).clamp(0.0, 1.0)
+                *current as f64 / *target as f64
             } else {
                 0.0
             };
-            fill(
-                &mut image,
-                64,
-                y as u32 + 34,
-                (832.0 * ratio) as u32,
-                12,
-                status_color,
-            );
-            label(
+            thin_track(&mut image, 64, y + 36, 756, ratio, accent);
+            label_right(
                 &mut image,
                 font,
-                16.0,
-                830,
-                y,
-                MUTED_TEXT,
+                14.0,
+                896,
+                y + 2,
+                TEXT_MUTE,
                 &format!("{current}/{target}"),
+                1.0,
             );
         }
-        label(
+        footnote(
             &mut image,
-            font,
-            17.0,
-            64,
-            HEIGHT as i32 - 66,
-            MUTED_TEXT,
+            Some(font),
             &format!(
                 "完成奖励：金币 {} · 刻印 {}（签到、机缘与决斗自动推进）",
                 data.coin_reward, data.mark_reward
             ),
         );
     }
-    finish(&assets, &mut image, "LUO REALM / 世界事件", None, path)
+    encode(path, &image)
 }
 
-fn blank() -> ImageBuffer<Rgba<u8>, Vec<u8>> {
-    ImageBuffer::from_pixel(WIDTH, HEIGHT, PAPER)
-}
+// ---- 共享辅助 ----
 
-pub(crate) fn finish(
-    assets: &assets::RealmAssets,
-    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
-    title: &str,
-    footnote: Option<&str>,
-    path: &Path,
-) -> io::Result<()> {
-    fill(image, 0, 0, WIDTH, HEADER_HEIGHT, HEADER);
-    if let Some(font) = assets.font() {
-        label(image, font, 30.0, 34, 10, LIGHT_TEXT, title);
-        if let Some(footnote) = footnote {
-            label(
-                image,
-                font,
-                16.0,
-                36,
-                HEIGHT as i32 - 34,
-                MUTED_TEXT,
-                footnote,
-            );
+/// 品阶解析：从规则注册表读取色、星数与显示名。
+///
+/// 品阶表来自 `data/luo_realm/rules/rarities.toml`（可整体覆盖）或内置
+/// 默认；本模块不关心品阶会套在什么物品上，只按品质代码取外观。
+fn tier_of(root: &Path, quality: &str) -> (Rgba<u8>, usize, String) {
+    let tiers = crate::domain::rules::rarity_tiers(root);
+    match crate::domain::rules::rarity_by_code(&tiers, quality) {
+        Some(tier) => {
+            let (red, green, blue) = tier.rgb();
+            (
+                Rgba([red, green, blue, 255]),
+                tier.stars as usize,
+                tier.display.clone(),
+            )
         }
+        None => (Rgba([112, 118, 124, 255]), 1, "普通".into()),
     }
-    let mut bytes = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(image.clone())
-        .write_to(&mut bytes, ImageFormat::Png)
-        .map_err(io::Error::other)?;
-    assets::atomic_write(path, bytes.get_ref())
 }
 
-pub(crate) fn fill(
-    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-    color: Rgba<u8>,
-) {
-    if width == 0 || height == 0 {
-        return;
+/// 词条代码的中文显示名。
+pub(crate) fn modifier_name(code: &str) -> &str {
+    match code {
+        "max_health" => "生命",
+        "attack" => "攻击",
+        "physical_defense" => "物防",
+        "arcane_defense" => "法防",
+        "soul_defense" => "魂防",
+        "speed" => "速度",
+        "critical_rate" => "暴击",
+        _ => code,
     }
-    imageproc::drawing::draw_filled_rect_mut(
-        image,
-        Rect::at(x as i32, y as i32).of_size(width, height),
-        color,
-    );
 }
 
-pub(crate) fn stat_bar(
-    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
-    x: u32,
-    y: u32,
-    ratio: f64,
-    color: Rgba<u8>,
-) {
-    fill(image, x, y, 468, 14, DIVIDER);
-    fill(
-        image,
-        x,
-        y,
-        (468.0 * ratio.clamp(0.02, 1.0)) as u32,
-        14,
-        color,
-    );
-}
-
-pub(crate) fn label(
-    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
-    font: &ab_glyph::FontArc,
-    size: f32,
-    x: i32,
-    y: i32,
-    color: Rgba<u8>,
-    text: &str,
-) {
-    draw_text_mut(image, color, x, y, PxScale::from(size), font, text);
+/// 大数字的紧凑显示：过万折算为「万」。
+pub(crate) fn format_number(value: f64) -> String {
+    if value.abs() >= 10_000.0 {
+        format!("{:.2}万", value / 10_000.0)
+    } else {
+        format!("{}", value.round() as i64)
+    }
 }
 
 pub(crate) fn system_color(system_id: &str) -> Rgba<u8> {
     match system_id {
-        "sword" => Rgba([43, 105, 158, 255]),
-        "body" => Rgba([169, 64, 47, 255]),
-        "mage" => Rgba([77, 86, 154, 255]),
-        "soul" => Rgba([103, 69, 132, 255]),
-        "qi" => Rgba([35, 129, 114, 255]),
-        "blood_demon" => Rgba([137, 35, 42, 255]),
-        "formation" => Rgba([51, 111, 72, 255]),
-        "alchemy_artifact" => Rgba([151, 108, 27, 255]),
-        "summoner" => Rgba([78, 112, 67, 255]),
-        "music" => Rgba([152, 70, 106, 255]),
-        _ => Rgba([65, 104, 75, 255]),
+        "sword" => Rgba([74, 128, 176, 255]),
+        "body" => Rgba([176, 92, 78, 255]),
+        "mage" => Rgba([104, 112, 176, 255]),
+        "soul" => Rgba([128, 94, 156, 255]),
+        "qi" => Rgba([72, 146, 132, 255]),
+        "blood_demon" => Rgba([160, 72, 78, 255]),
+        "formation" => Rgba([86, 132, 100, 255]),
+        "alchemy_artifact" => Rgba([168, 130, 70, 255]),
+        "summoner" => Rgba([108, 134, 94, 255]),
+        "music" => Rgba([162, 100, 128, 255]),
+        _ => Rgba([98, 128, 106, 255]),
     }
 }
 
