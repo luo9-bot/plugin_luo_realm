@@ -21,4 +21,5 @@
 //! 转换。
 
 pub mod error_code;
+pub mod rule_versions;
 pub mod shared;

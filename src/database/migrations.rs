@@ -17,6 +17,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
         9,
         include_str!("../../migrations/0009_character_identity.sql"),
     ),
+    (10, include_str!("../../migrations/0010_rule_versions.sql")),
 ];
 
 pub(crate) const CURRENT_SCHEMA_VERSION: i64 = MIGRATIONS[MIGRATIONS.len() - 1].0;

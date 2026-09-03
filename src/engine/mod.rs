@@ -2,7 +2,7 @@ use crate::{
     combat::{self, CombatAttributes, CombatSnapshot, CombatantSnapshot, ResourceSnapshot},
     core::Player,
     cultivation::{AttributeModifier, CultivationContext, registered_systems},
-    domain::shared::{CombatantId, PlatformUserId, PowerScore, RuleVersion, SystemId},
+    domain::shared::{CombatantId, PlatformUserId, PowerScore, SystemId},
     equipment,
 };
 
@@ -137,7 +137,7 @@ pub fn build_combat_snapshot(
     let left_snapshot = build_combatant_snapshot(left, 0, 0, date);
     let right_snapshot = build_combatant_snapshot(right, 1, 1, date);
     CombatSnapshot {
-        rule_version: RuleVersion::INITIAL,
+        rule_version: crate::domain::rule_versions::COMBAT,
         seed,
         rules: combat::BattleRules::default(),
         combatants: vec![left_snapshot, right_snapshot],

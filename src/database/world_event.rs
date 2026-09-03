@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
+use crate::domain::rule_versions;
+
 use super::{DatabaseError, DatabaseResult, player_id, unix_timestamp, wallet};
 
 #[derive(Clone, Copy, Debug)]
@@ -229,8 +231,8 @@ fn ensure_event(
         .execute(
             "INSERT INTO group_daily_events(
                  group_id, event_date, definition_id, event_name, description,
-                 coin_reward, mark_reward, seed, created_at
-             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 coin_reward, mark_reward, seed, rule_version, created_at
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 group,
                 date,
@@ -246,6 +248,7 @@ fn ensure_event(
                     crate::identity::VERSION_SALT,
                 )
                 .to_string(),
+                rule_versions::WORLD_EVENT.value(),
                 unix_timestamp(),
             ],
         )
@@ -394,4 +397,35 @@ fn contributors(
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(DatabaseError::from_sqlite)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EventSnapshot, ensure_event};
+    use crate::database::migrations;
+    use crate::domain::rule_versions;
+    use rusqlite::Connection;
+
+    #[test]
+    fn ensure_event_records_rule_version_and_is_idempotent() {
+        let mut connection = Connection::open_in_memory().expect("open in-memory database");
+        migrations::apply(&mut connection).expect("apply migrations");
+        let transaction = connection.transaction().expect("begin transaction");
+        let first: EventSnapshot =
+            ensure_event(&transaction, 20001, "2026-09-03").expect("first event");
+        let second: EventSnapshot =
+            ensure_event(&transaction, 20001, "2026-09-03").expect("second event");
+        transaction.commit().expect("commit");
+
+        assert_eq!(first.name, second.name);
+        assert_eq!(first.coin_reward, second.coin_reward);
+        let stored: u32 = connection
+            .query_row(
+                "SELECT rule_version FROM group_daily_events WHERE group_id=20001",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored rule version");
+        assert_eq!(stored, rule_versions::WORLD_EVENT.value());
+    }
 }

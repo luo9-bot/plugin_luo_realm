@@ -1,5 +1,6 @@
 use rusqlite::{OptionalExtension, Transaction, params};
 
+use crate::domain::shared::RuleVersion;
 use crate::engine::daily_state::{DailyModifiers, DailyState, DailyStateInput};
 
 use super::{DatabaseError, DatabaseResult, player_id, unix_timestamp};
@@ -23,8 +24,9 @@ pub fn get_or_create(
             "INSERT INTO player_daily_states(
                  player_id, state_date, state_id, state_name, description,
                  hp_modifier, attack_modifier, defense_modifier, speed_modifier,
-                 critical_modifier, destiny_modifier, source_json, seed, created_at
-             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 critical_modifier, destiny_modifier, source_json, seed,
+                 rule_version, created_at
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 id,
                 date,
@@ -39,6 +41,7 @@ pub fn get_or_create(
                 state.modifiers.destiny,
                 source_json,
                 state.seed.to_string(),
+                state.rule_version.value(),
                 unix_timestamp(),
             ],
         )
@@ -55,10 +58,18 @@ fn find(
         .query_row(
             "SELECT state_id, state_name, description, hp_modifier, attack_modifier,
                     defense_modifier, speed_modifier, critical_modifier,
-                    destiny_modifier, seed
+                    destiny_modifier, seed, rule_version
              FROM player_daily_states WHERE player_id=?1 AND state_date=?2",
             params![player_id(user_id)?, date],
             |row| {
+                let version = row.get::<_, u32>(10)?;
+                let rule_version = RuleVersion::new(version).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        10,
+                        rusqlite::types::Type::Integer,
+                        "rule_version 必须为正数".into(),
+                    )
+                })?;
                 Ok(DailyState {
                     id: row.get(0)?,
                     name: row.get(1)?,
@@ -78,6 +89,7 @@ fn find(
                             Box::new(error),
                         )
                     })?,
+                    rule_version,
                 })
             },
         )
@@ -171,4 +183,52 @@ fn previous_states(transaction: &Transaction<'_>, id: i64) -> DatabaseResult<Vec
         .map_err(DatabaseError::from_sqlite)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(DatabaseError::from_sqlite)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_or_create;
+    use crate::database::migrations;
+    use crate::domain::rule_versions;
+    use rusqlite::Connection;
+
+    fn memory_database() -> Connection {
+        let mut connection = Connection::open_in_memory().expect("open in-memory database");
+        migrations::apply(&mut connection).expect("apply migrations");
+        connection
+            .execute(
+                "INSERT INTO players(player_id, created_at, updated_at) VALUES(10001, 0, 0)",
+                [],
+            )
+            .expect("insert player");
+        connection
+            .execute(
+                "INSERT INTO player_cultivation(player_id, system_id, updated_at)
+                 VALUES(10001, 'sword', 0)",
+                [],
+            )
+            .expect("insert cultivation");
+        connection
+    }
+
+    #[test]
+    fn daily_state_records_rule_version_and_is_idempotent() {
+        let mut connection = memory_database();
+        let transaction = connection.transaction().expect("begin transaction");
+        let first = get_or_create(&transaction, 10001, "2026-09-03").expect("first state");
+        let second = get_or_create(&transaction, 10001, "2026-09-03").expect("second state");
+        transaction.commit().expect("commit");
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.seed, second.seed);
+        assert_eq!(first.rule_version, rule_versions::DAILY_STATE);
+        let stored: u32 = connection
+            .query_row(
+                "SELECT rule_version FROM player_daily_states WHERE player_id=10001",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored rule version");
+        assert_eq!(stored, rule_versions::DAILY_STATE.value());
+    }
 }
