@@ -22,4 +22,5 @@
 
 pub mod error_code;
 pub mod rule_versions;
+pub mod rules;
 pub mod shared;

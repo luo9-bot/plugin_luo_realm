@@ -634,6 +634,79 @@ pub fn remove_item(
     )
 }
 
+/// 调整单件物品的品阶，返回调整前的品质供审计展示。
+pub fn set_item_quality(
+    transaction: &Transaction<'_>,
+    operator: &str,
+    user_id: u64,
+    item_id: i64,
+    quality: &str,
+    reason: &str,
+) -> DatabaseResult<String> {
+    ensure_active_player(transaction, user_id)?;
+    let id = player_id(user_id)?;
+    let before: String = transaction
+        .query_row(
+            "SELECT quality FROM item_instances
+             WHERE item_instance_id=?1 AND player_id=?2",
+            params![item_id, id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(DatabaseError::from_sqlite)?
+        .ok_or(DatabaseError::NotFound)?;
+    transaction
+        .execute(
+            "UPDATE item_instances SET quality=?3
+             WHERE item_instance_id=?1 AND player_id=?2",
+            params![item_id, id, quality],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    audit_success(
+        transaction,
+        AuditEntry {
+            operator,
+            action: "item.set_quality",
+            target_type: "item",
+            target_id: &item_id.to_string(),
+            reason,
+            before: Some(serde_json::json!({ "quality": before })),
+            after: Some(serde_json::json!({ "quality": quality })),
+        },
+    )?;
+    Ok(before)
+}
+
+/// 列出玩家要批量调整品阶的物品：`equipped` 只取已装备，`all` 取全部。
+pub fn list_item_ids(
+    transaction: &Transaction<'_>,
+    user_id: u64,
+    scope: &str,
+) -> DatabaseResult<Vec<i64>> {
+    let id = player_id(user_id)?;
+    let sql = match scope {
+        "equipped" => {
+            "SELECT item.item_instance_id
+             FROM item_instances item
+             JOIN equipment_loadouts equipped USING(item_instance_id)
+             WHERE item.player_id=?1 ORDER BY item.item_instance_id"
+        }
+        "all" => {
+            "SELECT item_instance_id FROM item_instances
+             WHERE player_id=?1 ORDER BY item_instance_id"
+        }
+        _ => return Err(DatabaseError::InvalidData("未知物品范围".into())),
+    };
+    let mut statement = transaction
+        .prepare(sql)
+        .map_err(DatabaseError::from_sqlite)?;
+    statement
+        .query_map([id], |row| row.get(0))
+        .map_err(DatabaseError::from_sqlite)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(DatabaseError::from_sqlite)
+}
+
 pub fn update_statistic(
     transaction: &Transaction<'_>,
     operator: &str,

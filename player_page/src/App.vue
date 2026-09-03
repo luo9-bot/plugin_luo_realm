@@ -8,6 +8,7 @@ import {
   getProfile,
   type Profile,
 } from "./api";
+import { loadRarity } from "./rarity";
 import PageMenu from "./pages/PageMenu.vue";
 import PageProfile from "./pages/PageProfile.vue";
 import PageEquipment from "./pages/PageEquipment.vue";
@@ -43,6 +44,7 @@ async function loadProfile(): Promise<void> {
 function enter(): void {
   gate.value = false;
   current.value = "menu";
+  loadRarity().catch(() => {});
   loadProfile().catch(() => gateWith("会话已失效，请在群内重新发送「主页」。"));
 }
 
@@ -151,7 +153,11 @@ const refreshers: Record<Section, () => void> = {
         </div>
       </div>
       <PageMenu v-if="current === 'menu'" @open="open($event)" />
-      <PageProfile v-else-if="current === 'profile'" :profile="profile" />
+      <PageProfile
+        v-else-if="current === 'profile'"
+        :profile="profile"
+        @refresh="refreshers.profile()"
+      />
       <PageEquipment v-else-if="current === 'equipment'" />
       <PageSkills v-else-if="current === 'skills'" />
       <PageWallet v-else-if="current === 'wallet'" />

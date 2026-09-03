@@ -83,6 +83,15 @@ pub fn dispatch(method: &Method, url: &str, body: &[u8], state: &Arc<AdminState>
         (&Method::Delete, ["api", "players", player_id, "items", item_id]) => {
             remove_item(body, state, player_id, item_id)
         }
+        (&Method::Put, ["api", "players", player_id, "items", item_id]) => {
+            set_item_quality(body, state, player_id, item_id)
+        }
+        (&Method::Post, ["api", "players", player_id, "items", "set-quality"]) => {
+            set_items_quality(body, state, player_id)
+        }
+        (&Method::Post, ["api", "players", player_id, "items", "grant-set"]) => {
+            grant_item_set(body, state, player_id)
+        }
         (&Method::Put, ["api", "players", player_id, "statistics"]) => {
             update_statistic(body, state, player_id)
         }
@@ -450,6 +459,165 @@ fn remove_item(body: &[u8], state: &AdminState, player_id: &str, item_id: &str) 
             request.reason.trim(),
         )?;
         Ok(serde_json::json!({"removed": item_id}))
+    })
+}
+
+/// 品阶代码必须存在于规则注册表（`rules/rarities.toml` 或内置默认）。
+fn valid_quality(state: &AdminState, quality: &str) -> bool {
+    !quality.is_empty()
+        && crate::domain::rules::rarity_by_code(
+            &crate::domain::rules::rarity_tiers(&state.plugin_root),
+            quality,
+        )
+        .is_some()
+}
+
+#[derive(Deserialize)]
+struct QualityRequest {
+    quality: String,
+    reason: String,
+}
+
+fn set_item_quality(
+    body: &[u8],
+    state: &AdminState,
+    player_id: &str,
+    item_id: &str,
+) -> HttpResponse {
+    let (Some(player_id), Ok(item_id)) = (parse_id(player_id), item_id.parse::<i64>()) else {
+        return invalid("玩家或物品 ID 无效");
+    };
+    let request: QualityRequest = match parse(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if !valid_quality(state, &request.quality) || !valid_reason(&request.reason) {
+        return invalid("品阶代码或修改原因不合法");
+    }
+    write_database(state, |transaction| {
+        let before = admin::set_item_quality(
+            transaction,
+            "web",
+            player_id,
+            item_id,
+            &request.quality,
+            request.reason.trim(),
+        )?;
+        Ok(
+            serde_json::json!({"item_instance_id": item_id, "before": before, "quality": request.quality}),
+        )
+    })
+}
+
+#[derive(Deserialize)]
+struct BatchQualityRequest {
+    quality: String,
+    scope: String,
+    reason: String,
+}
+
+/// 批量调整品阶：`equipped` 只调整已装备，`all` 调整全部物品。
+fn set_items_quality(body: &[u8], state: &AdminState, player_id: &str) -> HttpResponse {
+    let Some(player_id) = parse_id(player_id) else {
+        return invalid("玩家 ID 无效");
+    };
+    let request: BatchQualityRequest = match parse(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if !valid_quality(state, &request.quality)
+        || !matches!(request.scope.as_str(), "equipped" | "all")
+        || !valid_reason(&request.reason)
+    {
+        return invalid("品阶、范围或修改原因不合法");
+    }
+    write_database(state, |transaction| {
+        let item_ids = admin::list_item_ids(transaction, player_id, &request.scope)?;
+        item_ids.iter().try_for_each(|item_id| {
+            admin::set_item_quality(
+                transaction,
+                "web",
+                player_id,
+                *item_id,
+                &request.quality,
+                request.reason.trim(),
+            )
+            .map(|_| ())
+        })?;
+        Ok(
+            serde_json::json!({"updated": item_ids.len(), "quality": request.quality, "scope": request.scope}),
+        )
+    })
+}
+
+#[derive(Deserialize)]
+struct GrantSetRequest {
+    quality: String,
+    equip: Option<bool>,
+    reason: String,
+    items: Vec<SetItemRequest>,
+}
+
+#[derive(Deserialize)]
+struct SetItemRequest {
+    slot: Option<String>,
+    definition_id: String,
+    quantity: Option<i64>,
+}
+
+/// 一次性发放一整套装备，可携带槽位直接穿戴；套装内容完全由请求描述，
+/// 服务端不内置任何模板（解耦：品阶注册表只管外观，套装只管清单）。
+fn grant_item_set(body: &[u8], state: &AdminState, player_id: &str) -> HttpResponse {
+    let Some(player_id) = parse_id(player_id) else {
+        return invalid("玩家 ID 无效");
+    };
+    let request: GrantSetRequest = match parse(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    if request.items.is_empty()
+        || request.items.len() > 12
+        || !valid_quality(state, &request.quality)
+        || !valid_reason(&request.reason)
+        || request
+            .items
+            .iter()
+            .any(|item| !valid_code(&item.definition_id))
+    {
+        return invalid("套装参数或修改原因不合法");
+    }
+    write_database(state, |transaction| {
+        let mut granted = Vec::with_capacity(request.items.len());
+        for item in &request.items {
+            let item_id = admin::grant_item(
+                transaction,
+                "web",
+                player_id,
+                &item.definition_id,
+                item.quantity.unwrap_or(1).clamp(1, 999_999),
+                &request.quality,
+                request.reason.trim(),
+            )?;
+            let equipped = match item
+                .slot
+                .as_deref()
+                .filter(|_| request.equip != Some(false))
+            {
+                Some(slot) => {
+                    let slot = crate::combat::EquipmentSlot::from_code(slot)
+                        .ok_or_else(|| DatabaseError::InvalidData(format!("未知装备槽：{slot}")))?;
+                    crate::database::inventory::equip(transaction, player_id, item_id, slot)?;
+                    Some(slot.code().to_owned())
+                }
+                None => None,
+            };
+            granted.push(serde_json::json!({
+                "item_instance_id": item_id,
+                "definition_id": item.definition_id,
+                "equipped_slot": equipped,
+            }));
+        }
+        Ok(serde_json::json!({"quality": request.quality, "items": granted}))
     })
 }
 

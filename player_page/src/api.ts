@@ -1,6 +1,6 @@
 /** 玩家网页 API：一次性票据换会话，之后以 Bearer 会话调用只读接口。 */
 
-const API_BASE: string = import.meta.env.VITE_API_BASE ?? "";
+export const API_BASE: string = import.meta.env.VITE_API_BASE ?? "";
 const SESSION_KEY = "lr-player-session";
 
 export interface Profile {
@@ -145,6 +145,14 @@ export function getEquipment(): Promise<Equipment> {
 
 export function getBattles(): Promise<Battles> {
   return request("GET", "/api/player/battles");
+}
+
+export function getPortraits(): Promise<{ portraits: string[] }> {
+  return request("GET", "/api/player/portraits");
+}
+
+export function setCharacter(characterId: string): Promise<{ character_id: string }> {
+  return request("POST", "/api/player/character", { character_id: characterId });
 }
 
 /** 物品图标地址：服务端按与群内卡片一致的规则挑选素材。 */

@@ -257,27 +257,22 @@ const PANEL_DARK: Rgba<u8> = Rgba([26, 31, 38, 255]);
 const TILE_DARK: Rgba<u8> = Rgba([16, 20, 26, 255]);
 const TILE_EMPTY: Rgba<u8> = Rgba([38, 45, 54, 255]);
 
-/// 品质对应的稀有度色环与星数。
-pub(crate) fn rarity_tier(quality: &str) -> (Rgba<u8>, usize) {
-    match quality {
-        "legendary" => (Rgba([214, 158, 62, 255]), 5),
-        "epic" => (Rgba([142, 92, 190, 255]), 4),
-        "rare" => (Rgba([64, 118, 176, 255]), 3),
-        "fine" => (Rgba([70, 138, 96, 255]), 2),
-        _ => (Rgba([112, 118, 124, 255]), 1),
-    }
-}
-
-/// 品质的中文显示名。
-pub(crate) fn rarity_display(quality: &str) -> &'static str {
-    match quality {
-        "legendary" => "传奇",
-        "epic" => "史诗",
-        "rare" => "珍贵",
-        "fine" => "精良",
-        "common" => "普通",
-        "legacy" => "遗留",
-        _ => "普通",
+/// 品阶解析：从规则注册表读取色环、星数与显示名。
+///
+/// 品阶表来自 `data/luo_realm/rules/rarities.toml`（可整体覆盖）或内置
+/// 默认；本模块不关心品阶会套在什么物品上，只按品质代码取外观。
+fn tier_of(root: &Path, quality: &str) -> (Rgba<u8>, usize, String) {
+    let tiers = crate::domain::rules::rarity_tiers(root);
+    match crate::domain::rules::rarity_by_code(&tiers, quality) {
+        Some(tier) => {
+            let (red, green, blue) = tier.rgb();
+            (
+                Rgba([red, green, blue, 255]),
+                tier.stars as usize,
+                tier.display.clone(),
+            )
+        }
+        None => (Rgba([112, 118, 124, 255]), 1, "普通".into()),
     }
 }
 
@@ -377,7 +372,7 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
                 .find(|slot| slot.slot_code == slot_code);
             let (ring, icon, glyph) = match slot {
                 Some(slot) => {
-                    let (ring, _) = rarity_tier(&slot.quality);
+                    let (ring, _, _) = tier_of(root, &slot.quality);
                     (
                         ring,
                         assets.equipment_icon(&slot.item_name),
@@ -414,7 +409,7 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
         }
         for (index, item) in data.bag.iter().enumerate().take(7) {
             let x = 150 + index as u32 * 100;
-            let (ring, _) = rarity_tier(&item.quality);
+            let (ring, _, _) = tier_of(root, &item.quality);
             item_tile(
                 &assets,
                 &mut image,
@@ -482,7 +477,7 @@ fn slot_display_name(slot_code: &str) -> &str {
 /// 渲染物品详情卡片：稀有度名条 + 图标 + 词条列表。
 pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
-    let (ring, stars) = rarity_tier(data.quality);
+    let (ring, stars, rarity_name) = tier_of(root, data.quality);
     let mut image = blank();
     fill(
         &mut image,
@@ -505,15 +500,7 @@ pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::R
             LIGHT_TEXT,
             &truncate_name(data.definition_id, 9),
         );
-        label(
-            &mut image,
-            font,
-            16.0,
-            56,
-            152,
-            ring,
-            rarity_display(data.quality),
-        );
+        label(&mut image, font, 16.0, 56, 152, ring, rarity_name.as_str());
         for star in 0..stars {
             label(
                 &mut image,

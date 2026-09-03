@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { getEquipment, itemIcon, type Equipment } from "../api";
+import { getEquipment, itemIcon, type Equipment, type Item } from "../api";
+import { tierBorderStyle, tierOf } from "../rarity";
 
 const equipment = ref<Equipment | null>(null);
 
@@ -15,6 +16,14 @@ const SLOTS: [string, string][] = [
   ["accessory_2", "饰品二"],
 ];
 
+function equippedIn(code: string): Item | undefined {
+  return equipment.value?.items.find((item) => item.equipped_slot === code);
+}
+
+function tierName(quality: string): string {
+  return tierOf(quality)?.display ?? quality;
+}
+
 onMounted(async () => {
   equipment.value = await getEquipment();
 });
@@ -28,18 +37,17 @@ onMounted(async () => {
         v-for="[code, label] in SLOTS"
         :key="code"
         class="item"
-        :class="
-          equipment?.items.some((item) => item.equipped_slot === code)
-            ? `rarity-${equipment.items.find((item) => item.equipped_slot === code)?.quality}`
-            : ''
+        :style="equippedIn(code) ? tierBorderStyle(equippedIn(code)!.quality) : ''"
+        :title="
+          equippedIn(code) ? `${equippedIn(code)!.definition_id}（${tierName(equippedIn(code)!.quality)}）` : label
         "
       >
-        <template v-if="equipment?.items.some((item) => item.equipped_slot === code)">
+        <template v-if="equippedIn(code)">
           <img
-            :src="itemIcon(equipment.items.find((item) => item.equipped_slot === code)!.definition_id)"
-            :alt="equipment.items.find((item) => item.equipped_slot === code)!.definition_id"
+            :src="itemIcon(equippedIn(code)!.definition_id)"
+            :alt="equippedIn(code)!.definition_id"
           />
-          <div class="name">{{ equipment.items.find((item) => item.equipped_slot === code)!.definition_id }}</div>
+          <div class="name">{{ equippedIn(code)!.definition_id }}</div>
         </template>
         <template v-else>
           <div class="glyph">空</div>
@@ -55,7 +63,8 @@ onMounted(async () => {
         v-for="item in equipment.items.filter((item) => !item.equipped_slot)"
         :key="item.item_id"
         class="item"
-        :class="`rarity-${item.quality}`"
+        :style="tierBorderStyle(item.quality)"
+        :title="`${item.definition_id}（${tierName(item.quality)}）`"
       >
         <img :src="itemIcon(item.definition_id)" :alt="item.definition_id" />
         <span v-if="item.quantity > 1" class="qty">×{{ item.quantity }}</span>

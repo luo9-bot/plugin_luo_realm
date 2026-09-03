@@ -7,6 +7,8 @@
 
 use std::{io::Cursor, path::PathBuf, sync::Arc};
 
+use serde::Deserialize;
+
 use crate::admin::router::{AdminState, HttpResponse};
 use crate::config::RuntimeConfig;
 use crate::database::{Database, DatabaseError, unix_timestamp};
@@ -36,6 +38,15 @@ pub fn route(
         }
         (tiny_http::Method::Options, _) if path.starts_with("/api/player/") => {
             Some(preflight(&config, request))
+        }
+        (tiny_http::Method::Get, "/api/player/meta/rarity") => {
+            Some(rarity_meta_endpoint(state, &config))
+        }
+        (tiny_http::Method::Get, "/api/player/portraits") => {
+            Some(portraits_endpoint(request, state, &config))
+        }
+        (tiny_http::Method::Post, "/api/player/character") => {
+            Some(set_character_endpoint(request, state, &config))
         }
         (tiny_http::Method::Post, "/api/player/session") => {
             Some(exchange_endpoint(request, state, &config))
@@ -357,6 +368,119 @@ fn authorize(request: &tiny_http::Request, state: &Arc<AdminState>) -> Option<Se
     let token = header.value.as_str().strip_prefix("Bearer ")?;
     let key = state.token.signing_key();
     session::verify(&key, token, unix_timestamp()).ok()
+}
+
+/// 品阶元数据：卡片、详情卡与网页共用的同一份注册表。
+fn rarity_meta_endpoint(state: &Arc<AdminState>, config: &RuntimeConfig) -> HttpResponse {
+    let tiers = crate::domain::rules::rarity_tiers(&state.plugin_root);
+    finish(
+        crate::admin::router::ok(serde_json::json!({ "tiers": tiers })),
+        config,
+        None,
+    )
+}
+
+/// 可选角色形象列表（需要会话）。
+fn portraits_endpoint(
+    request: &tiny_http::Request,
+    state: &Arc<AdminState>,
+    config: &RuntimeConfig,
+) -> HttpResponse {
+    let origin = origin_of(request);
+    if authorize(request, state).is_none() {
+        return finish(
+            crate::admin::router::error(401, "session_invalid", "会话缺失、无效或已过期"),
+            config,
+            origin,
+        );
+    }
+    let ids = crate::render::assets::RealmAssets::discover(&state.plugin_root).portrait_ids();
+    finish(
+        crate::admin::router::ok(serde_json::json!({ "portraits": ids })),
+        config,
+        origin,
+    )
+}
+
+#[derive(Deserialize)]
+struct CharacterRequest {
+    character_id: String,
+}
+
+/// 设置角色形象：网页上唯一的外观类写入，不触及任何数值资产。
+fn set_character_endpoint(
+    request: &mut tiny_http::Request,
+    state: &Arc<AdminState>,
+    config: &RuntimeConfig,
+) -> HttpResponse {
+    let origin = origin_of(request);
+    let Some(session) = authorize(request, state) else {
+        return finish(
+            crate::admin::router::error(401, "session_invalid", "会话缺失、无效或已过期"),
+            config,
+            origin,
+        );
+    };
+    let body = match crate::admin::router::read_body(request, 1_024) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let Some(character_id) = serde_json::from_slice::<CharacterRequest>(&body)
+        .ok()
+        .map(|request| request.character_id)
+    else {
+        return finish(
+            crate::admin::router::error(400, "invalid_request", "请求必须包含 character_id"),
+            config,
+            origin,
+        );
+    };
+    let assets = crate::render::assets::RealmAssets::discover(&state.plugin_root);
+    if assets.portrait_by_id(&character_id).is_none() {
+        return finish(
+            crate::admin::router::error(404, "portrait_not_found", "该形象不存在"),
+            config,
+            origin,
+        );
+    }
+    let outcome = Database::open_request(&state.database_path).and_then(|mut database| {
+        let db_transaction = database.immediate_transaction()?;
+        let row_id = i64::try_from(session.platform_user_id)
+            .map_err(|_| DatabaseError::InvalidIdentifier)?;
+        let updated = db_transaction
+            .execute(
+                "UPDATE player_profiles SET character_id=?2 WHERE player_id=?1",
+                rusqlite::params![row_id, character_id],
+            )
+            .map_err(DatabaseError::from_sqlite)?;
+        if updated == 0 {
+            return Err(DatabaseError::NotFound);
+        }
+        crate::database::admin::audit_success(
+            &db_transaction,
+            crate::database::admin::AuditEntry {
+                operator: &format!("player:{}", session.platform_user_id),
+                action: "player.set_character",
+                target_type: "player",
+                target_id: &session.platform_user_id.to_string(),
+                reason: "网页档案页更换形象",
+                before: None,
+                after: Some(serde_json::json!({ "character_id": character_id })),
+            },
+        )?;
+        db_transaction
+            .commit()
+            .map_err(DatabaseError::from_sqlite)?;
+        Ok(serde_json::json!({ "character_id": character_id }))
+    });
+    let response = match outcome {
+        Ok(value) => crate::admin::router::ok(value),
+        Err(DatabaseError::NotFound) => {
+            crate::admin::router::error(404, "player_not_found", "档案不存在")
+        }
+        Err(error) => crate::admin::router::error(500, error.error_code(), "设置形象失败"),
+    };
+    finish(response, config, origin)
 }
 
 fn ticket_error_response(error: &TicketError) -> HttpResponse {

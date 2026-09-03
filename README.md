@@ -212,12 +212,65 @@ Copy-Item -Recurse -Force player_page\dist\* data\luo_realm\player_page\
 
 - 票据绑定玩家与 `profile:read` 范围，一次性使用，nonce 持久化于 `player_web_tickets`。
 - 会话为无状态 HMAC 签名值，默认 2 小时有效；轮换管理 Token 会立即失效全部票据与会话。
-- 接口全部只读：网页永远不会替玩家生成每日状态、解锁技能或修改任何权威状态。
+- 数据接口全部只读；唯一的网页写入入口是「更换形象」（外观类，写审计），不触及数值资产。
 - `/api/player/asset/` 提供装备图标与角色立绘（与群内卡片同一挑选规则），仅暴露游戏素材。
+- 玩家可在网页「角色卡」页直接从素材库选择形象并保存，群内卡片即时同步。
 
 启用方式：把 `data/luo_realm/config/config.toml` 中 `[player_web].enabled` 改为 `true`，
 并将 `base_url` 指向可访问的页面地址（本地默认 `http://127.0.0.1:18765/player`）。本地联调可运行
 `cargo run --example player_web_dev`，它会启动一个种子角色齐全的演示服务器并打印测试票据链接。
+
+## Cloudflare Pages 部署指南
+
+部署形态：页面托管在 Cloudflare Pages，玩家 API 由插件服务器经 HTTPS 反向代理提供，
+两者通过一次性票据（`?ticket=`）与跨域白名单协作。
+
+前置条件：
+
+- 插件服务器可达公网：为管理端口配置 HTTPS 反向代理（Caddy/Nginx + 域名证书），
+  该地址即玩家 API 地址，下文记作 `https://api.example.com`。
+- Node 18+ 与 npm。
+
+第一步，构建页面：
+
+```powershell
+cd player_page
+npm install
+$env:VITE_API_BASE = "https://api.example.com"   # API 地址，构建时注入
+npm run build                                     # 产物在 player_page/dist
+```
+
+第二步，发布到 Cloudflare Pages（二选一）：
+
+```powershell
+# 方式 A：控制台 Direct Upload —— Pages → Create project → 上传 dist 目录
+# 方式 B：Wrangler CLI
+npx wrangler pages deploy dist --project-name luo-realm
+```
+
+记下分配的域名，例如 `https://luo-realm.pages.dev`。
+
+第三步，插件配置（`data/luo_realm/config/config.toml`）：
+
+```toml
+[player_web]
+enabled = true
+base_url = "https://luo-realm.pages.dev"          # 群内「主页」链接指向 Pages
+allowed_origins = ["https://luo-realm.pages.dev"] # Pages 跨域调用 API 的白名单
+ticket_ttl_minutes = 10
+session_ttl_minutes = 120
+```
+
+注意：`base_url` 指向 Pages 根域名、不带斜杠（Pages 站点根即页面）；本地部署时才使用
+`http://127.0.0.1:18765/player` 这类带路径的地址。保存配置（后台设置页或重启插件）后，
+在群里发送 `主页` 验证：链接应打开 Pages 页面并成功换取会话。
+
+安全清单：
+
+- 管理 Token 与数据库只存在于插件服务器，绝不写入任何前端配置。
+- `allowed_origins` 只填确切的 Pages 域名（含 `https://`，不带斜杠）。
+- 反向代理必须强制 HTTPS；含 `ticket` 的链接等同钥匙，不要转发到群聊之外。
+- 自定义域名变更时，同步更新 `base_url`、`allowed_origins` 并重新构建页面（`VITE_API_BASE`）。
 
 未注册、待选体系和已停用角色会分别收到明确提示。任何普通玩法命令都不会隐式创建玩家，
 未知文本也不会写入数据库。

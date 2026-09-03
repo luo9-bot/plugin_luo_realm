@@ -60,12 +60,7 @@ impl RealmAssets {
     }
 
     pub fn portrait_by_id(&self, character_id: &str) -> Option<DynamicImage> {
-        if character_id.is_empty()
-            || character_id.contains('/')
-            || character_id.contains('\\')
-            || character_id.contains("..")
-            || character_id.chars().any(char::is_control)
-        {
+        if !portrait_id_is_safe(character_id) {
             return None;
         }
         image::open(
@@ -74,6 +69,14 @@ impl RealmAssets {
                 .join(format!("{character_id}.png")),
         )
         .ok()
+    }
+
+    /// 可选角色形象列表（`portraits/` 下全部 PNG 的文件名主干）。
+    pub fn portrait_ids(&self) -> Vec<String> {
+        png_files(&self.root.join("portraits"))
+            .iter()
+            .filter_map(|path| path.file_stem()?.to_str().map(str::to_owned))
+            .collect()
     }
 
     pub fn realm_badge(&self, realm_index: u32) -> Option<DynamicImage> {
@@ -160,6 +163,15 @@ fn load_font(path: PathBuf) -> Option<FontArc> {
     fs::read(path)
         .ok()
         .and_then(|bytes| FontArc::try_from_vec(bytes).ok())
+}
+
+/// 角色 ID 只允许出现在单一路径段中，杜绝路径穿越。
+fn portrait_id_is_safe(character_id: &str) -> bool {
+    !character_id.is_empty()
+        && !character_id.contains('/')
+        && !character_id.contains('\\')
+        && !character_id.contains("..")
+        && !character_id.chars().any(char::is_control)
 }
 
 fn png_files(directory: &Path) -> Vec<PathBuf> {
