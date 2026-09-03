@@ -220,6 +220,40 @@ pub fn rename(
     Ok(display_name)
 }
 
+/// 设置角色形象：唯一的外观类写操作，不触及任何数值资产。
+///
+/// 群聊命令与玩家网页两个入口共用；写入与审计在同一事务内完成。
+/// 形象 ID 的存在性与路径安全由调用方先行校验（`portrait_by_id`）。
+pub fn set_character(
+    transaction: &Transaction<'_>,
+    user_id: u64,
+    character_id: &str,
+    operator: &str,
+    reason: &str,
+) -> DatabaseResult<()> {
+    let updated = transaction
+        .execute(
+            "UPDATE player_profiles SET character_id=?2 WHERE player_id=?1",
+            params![player_id(user_id)?, character_id],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    if updated == 0 {
+        return Err(DatabaseError::NotFound);
+    }
+    super::admin::audit_success(
+        transaction,
+        super::admin::AuditEntry {
+            operator,
+            action: "player.set_character",
+            target_type: "player",
+            target_id: &user_id.to_string(),
+            reason,
+            before: None,
+            after: Some(serde_json::json!({ "character_id": character_id })),
+        },
+    )
+}
+
 fn validated_display_name(display_name: &str) -> DatabaseResult<String> {
     let normalized = display_name.trim();
     let char_count = normalized.chars().count();

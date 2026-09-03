@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use crate::admin::router::{AdminState, HttpResponse};
 use crate::config::RuntimeConfig;
-use crate::database::{Database, DatabaseError, DatabaseResult, unix_timestamp};
+use crate::database::{Database, DatabaseError, unix_timestamp};
 use crate::domain::error_code::StableErrorCode;
 use crate::domain::shared::PlatformUserId;
 
@@ -475,11 +475,12 @@ fn command_endpoint(
         if assets.portrait_by_id(&character_id).is_none() {
             return Err(DatabaseError::InvalidData("该形象不存在".into()));
         }
-        apply_character_change(
+        crate::database::player::set_character(
             &db_transaction,
             session.platform_user_id,
             &character_id,
             &format!("player_page:{}", session.platform_user_id),
+            "网页档案页更换形象",
         )?;
         db_transaction
             .commit()
@@ -530,37 +531,6 @@ struct CharacterRequest {
     character_id: String,
 }
 
-/// 应用形象变更：校验归属、写入并审计（网页两个写入入口共用）。
-fn apply_character_change(
-    transaction: &rusqlite::Transaction<'_>,
-    platform_user_id: u64,
-    character_id: &str,
-    operator: &str,
-) -> DatabaseResult<()> {
-    let row_id = i64::try_from(platform_user_id).map_err(|_| DatabaseError::InvalidIdentifier)?;
-    let updated = transaction
-        .execute(
-            "UPDATE player_profiles SET character_id=?2 WHERE player_id=?1",
-            rusqlite::params![row_id, character_id],
-        )
-        .map_err(DatabaseError::from_sqlite)?;
-    if updated == 0 {
-        return Err(DatabaseError::NotFound);
-    }
-    crate::database::admin::audit_success(
-        transaction,
-        crate::database::admin::AuditEntry {
-            operator,
-            action: "player.set_character",
-            target_type: "player",
-            target_id: &platform_user_id.to_string(),
-            reason: "网页档案页更换形象",
-            before: None,
-            after: Some(serde_json::json!({ "character_id": character_id })),
-        },
-    )
-}
-
 /// 设置角色形象：网页上唯一的外观类写入，不触及任何数值资产。
 fn set_character_endpoint(
     request: &mut tiny_http::Request,
@@ -600,11 +570,12 @@ fn set_character_endpoint(
     let operator = format!("player:{}", session.platform_user_id);
     let outcome = Database::open_request(&state.database_path).and_then(|mut database| {
         let db_transaction = database.immediate_transaction()?;
-        apply_character_change(
+        crate::database::player::set_character(
             &db_transaction,
             session.platform_user_id,
             &character_id,
             &operator,
+            "网页档案页更换形象",
         )?;
         db_transaction
             .commit()

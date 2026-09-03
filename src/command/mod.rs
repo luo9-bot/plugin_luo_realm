@@ -45,6 +45,7 @@ enum Command {
     Tactic,
     Equipment,
     Cultivate,
+    Portrait,
     HomePage,
 }
 
@@ -70,6 +71,7 @@ impl Command {
             "战术" | "tactic" => Some(Self::Tactic),
             "装备" | "equipment" => Some(Self::Equipment),
             "修行行动" | "cultivate" => Some(Self::Cultivate),
+            "形象" | "portrait" => Some(Self::Portrait),
             "主页" | "个人主页" | "网页" => Some(Self::HomePage),
             _ => None,
         }
@@ -188,6 +190,7 @@ fn dispatch(
         Command::Tactic => tactic(database, user_id, arguments),
         Command::Equipment => equipment(database, root, user_id, arguments),
         Command::Cultivate => cultivate(database, user_id, arguments),
+        Command::Portrait => portrait(database, root, user_id, arguments),
         Command::HomePage => home_page(database, root, user_id, &config.player_web),
     }
 }
@@ -221,7 +224,7 @@ fn image_reply(path: &Path) -> String {
 fn menu(database: &mut Database, root: &Path) -> Result<String, DatabaseError> {
     let _ = database;
     let fallback = format!(
-        "{}：注册 / 体系 / 选择体系 / 签到 / 修行行动 / 技能 / 战术 / 装备 / 状态 / 今日状态 / 战力 / 每日事件 / 世界事件 / 决斗 / 御空试炼 / 兑换 / 排行 / 改名",
+        "{}：注册 / 体系 / 选择体系 / 签到 / 修行行动 / 技能 / 战术 / 装备 / 形象 / 状态 / 今日状态 / 战力 / 每日事件 / 世界事件 / 决斗 / 御空试炼 / 兑换 / 排行 / 改名",
         identity::PRODUCT_NAME
     );
     Ok(card_reply(root, "menu.png", render::menu, fallback))
@@ -245,6 +248,50 @@ fn systems(database: &mut Database, root: &Path) -> Result<String, DatabaseError
         |root, path| render::systems(root, &entries, path),
         fallback,
     ))
+}
+
+/// 形象命令：列出可选形象，或设置自己的角色形象。
+///
+/// 校验与网页端共用：`portrait_by_id` 同时负责存在性与路径安全（拒绝
+/// 路径穿越）；写入与审计同事务完成（`database::player::set_character`）。
+fn portrait(
+    database: &mut Database,
+    root: &Path,
+    user_id: u64,
+    arguments: &[&str],
+) -> Result<String, DatabaseError> {
+    let assets = crate::render::assets::RealmAssets::discover(root);
+    match arguments {
+        [] => {
+            let ids = assets.portrait_ids();
+            if ids.is_empty() {
+                return Ok(
+                    "暂无可选形象，请联系管理员将 PNG 放入 data/luo_realm/assets/realm/portraits/。"
+                        .into(),
+                );
+            }
+            Ok(format!(
+                "可选形象：{}。\n发送 形象 <编号> 设置；网页档案页也可更换。",
+                ids.join("、")
+            ))
+        }
+        [character_id] => {
+            if assets.portrait_by_id(character_id).is_none() {
+                return Ok("该形象不存在。发送 形象 查看可选列表。".into());
+            }
+            let transaction = database.immediate_transaction()?;
+            crate::database::player::set_character(
+                &transaction,
+                user_id,
+                character_id,
+                &format!("group_command:{user_id}"),
+                "群聊命令更换形象",
+            )?;
+            transaction.commit().map_err(DatabaseError::from_sqlite)?;
+            Ok(format!("形象已更换为「{character_id}」。"))
+        }
+        _ => Ok("用法：形象 或 形象 <编号>".into()),
+    }
 }
 
 /// 生成档案页链接（设计方案书 20.3）。
