@@ -458,6 +458,54 @@ fn equipment(
             "该装备槽为空。".into()
         });
     }
+    let view_target = if arguments.first() == Some(&"查看") {
+        arguments.get(1).and_then(|value| value.parse::<i64>().ok())
+    } else {
+        arguments
+            .first()
+            .and_then(|value| value.parse::<i64>().ok())
+    };
+    if let Some(item_id) = view_target {
+        let Some(detail) = database::inventory::item_detail(&transaction, user_id, item_id)? else {
+            transaction.commit().map_err(DatabaseError::from_sqlite)?;
+            return Ok(format!("没有找到编号 #{item_id} 的物品。"));
+        };
+        transaction.commit().map_err(DatabaseError::from_sqlite)?;
+        let equipped_slot = detail.equipped_slot.clone();
+        let equipped_note = equipped_slot
+            .as_ref()
+            .map(|slot| format!("已装备于 {slot}"))
+            .unwrap_or_else(|| "未装备".into());
+        let fallback = format!(
+            "#{} {} ×{} 品质 {} +{} {}",
+            detail.item_id,
+            detail.definition_id,
+            detail.quantity,
+            detail.quality,
+            detail.level,
+            equipped_note
+        );
+        return Ok(card_reply(
+            root,
+            &format!("item_{item_id}.png"),
+            |root, path| {
+                render::item_detail(
+                    root,
+                    &render::ItemDetailData {
+                        item_id: detail.item_id,
+                        definition_id: &detail.definition_id,
+                        quality: &detail.quality,
+                        level: detail.level,
+                        quantity: detail.quantity,
+                        equipped_slot: equipped_slot.as_deref(),
+                        modifiers: &detail.modifiers,
+                    },
+                    path,
+                )
+            },
+            fallback,
+        ));
+    }
     let player = active_player(&transaction, user_id)?;
     let cultivation = database::cultivation::get(&transaction, user_id)?;
     let items = database::inventory::list(&transaction, user_id)?;
@@ -469,13 +517,21 @@ fn equipment(
         .filter_map(|item| {
             item.equipped_slot
                 .clone()
-                .map(|slot| (slot, item.definition_id.clone()))
+                .map(|slot| render::EquippedSlotView {
+                    slot_code: slot,
+                    item_name: item.definition_id.clone(),
+                    quality: item.quality.clone(),
+                })
         })
         .collect::<Vec<_>>();
     let bag = items
         .iter()
         .filter(|item| item.equipped_slot.is_none())
-        .map(|item| (item.definition_id.clone(), item.quantity))
+        .map(|item| render::BagItemView {
+            name: item.definition_id.clone(),
+            quality: item.quality.clone(),
+            quantity: item.quantity,
+        })
         .collect::<Vec<_>>();
     let fallback = items
         .iter()

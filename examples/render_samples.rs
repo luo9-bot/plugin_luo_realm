@@ -79,22 +79,30 @@ fn main() -> std::io::Result<()> {
     println!("技能.png");
 
     let equipped = [
-        ("main_hand", "精铁长剑"),
-        ("head", "青岚束发冠"),
-        ("body", "游侠劲装"),
-        ("accessory_1", "凝血玉佩"),
+        ("main_hand", "精铁长剑", "rare"),
+        ("head", "青岚束发冠", "fine"),
+        ("body", "游侠劲装", "common"),
+        ("accessory_1", "凝血玉佩", "epic"),
     ]
     .into_iter()
-    .map(|(slot, item)| (slot.to_owned(), item.to_owned()))
+    .map(|(slot, item, quality)| render::EquippedSlotView {
+        slot_code: slot.to_owned(),
+        item_name: item.to_owned(),
+        quality: quality.to_owned(),
+    })
     .collect::<Vec<_>>();
     let bag = [
-        ("凝血丹", 3_i64),
-        ("护身符", 1),
-        ("玄铁", 7),
-        ("剑意残卷", 2),
+        ("凝血丹", "fine", 3_i64),
+        ("护身符", "epic", 1),
+        ("玄铁", "common", 7),
+        ("剑意残卷", "rare", 2),
     ]
     .into_iter()
-    .map(|(name, quantity)| (name.to_owned(), quantity))
+    .map(|(name, quality, quantity)| render::BagItemView {
+        name: name.to_owned(),
+        quality: quality.to_owned(),
+        quantity,
+    })
     .collect::<Vec<_>>();
     render::equipment(
         &root,
@@ -108,6 +116,26 @@ fn main() -> std::io::Result<()> {
         &output.join("装备.png"),
     )?;
     println!("装备.png");
+
+    let detail_modifiers = [
+        ("attack".to_owned(), 36),
+        ("max_health".to_owned(), 240),
+        ("critical_rate".to_owned(), 2),
+    ];
+    render::item_detail(
+        &root,
+        &render::ItemDetailData {
+            item_id: 42,
+            definition_id: "精铁长剑",
+            quality: "epic",
+            level: 7,
+            quantity: 1,
+            equipped_slot: Some("main_hand"),
+            modifiers: &detail_modifiers,
+        },
+        &output.join("物品详情.png"),
+    )?;
+    println!("物品详情.png");
 
     render::destiny(
         &root,

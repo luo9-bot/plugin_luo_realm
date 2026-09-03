@@ -5,7 +5,7 @@
 //! 携带玩家会话。全部接口都在安全响应头保护之下，跨域来源由配置白名单
 //! 控制（设计方案书 27.2、27.4）。
 
-use std::sync::Arc;
+use std::{io::Cursor, path::PathBuf, sync::Arc};
 
 use crate::admin::router::{AdminState, HttpResponse};
 use crate::config::RuntimeConfig;
@@ -29,25 +29,19 @@ pub fn route(
     let config = state.policy.snapshot();
     match (method.clone(), path) {
         (tiny_http::Method::Get, "/player") | (tiny_http::Method::Get, "/player/") => {
-            Some(html_page(&config))
+            Some(page_index(state, &config))
         }
-        (tiny_http::Method::Get, "/player/app.js") => Some(static_asset(
-            include_str!("assets/app.js"),
-            "text/javascript; charset=utf-8",
-            &config,
-            request,
-        )),
-        (tiny_http::Method::Get, "/player/style.css") => Some(static_asset(
-            include_str!("assets/style.css"),
-            "text/css; charset=utf-8",
-            &config,
-            request,
-        )),
+        (tiny_http::Method::Get, file_path) if file_path.starts_with("/player/") => {
+            Some(page_asset(state, &config, file_path, request))
+        }
         (tiny_http::Method::Options, _) if path.starts_with("/api/player/") => {
             Some(preflight(&config, request))
         }
         (tiny_http::Method::Post, "/api/player/session") => {
             Some(exchange_endpoint(request, state, &config))
+        }
+        (tiny_http::Method::Get, asset_path) if asset_path.starts_with("/api/player/asset/") => {
+            Some(asset_endpoint(state, &config, asset_path, request))
         }
         (tiny_http::Method::Get, view_path) if view_path.starts_with("/api/player/") => {
             Some(read_endpoint(view_path, request, state, &config))
@@ -56,7 +50,15 @@ pub fn route(
     }
 }
 
-fn html_page(config: &RuntimeConfig) -> HttpResponse {
+/// 部署目录：把 `player_page/dist` 的构建产物复制到该目录即可启用 Vue 页面。
+fn page_directory(state: &AdminState) -> PathBuf {
+    crate::paths::data_directory(&state.plugin_root).join("player_page")
+}
+
+fn page_index(state: &Arc<AdminState>, config: &RuntimeConfig) -> HttpResponse {
+    if let Ok(bytes) = std::fs::read(page_directory(state).join("index.html")) {
+        return with_cors(crate::admin::router::html_bytes(bytes), config, None);
+    }
     with_cors(
         crate::admin::router::html(include_str!("assets/index.html")),
         config,
@@ -64,14 +66,150 @@ fn html_page(config: &RuntimeConfig) -> HttpResponse {
     )
 }
 
-fn static_asset(
-    content: &str,
-    content_type: &str,
+/// 伺服部署目录下的静态文件；旧内嵌资源在磁盘缺失时兜底。
+fn page_asset(
+    state: &Arc<AdminState>,
     config: &RuntimeConfig,
+    path: &str,
     request: &tiny_http::Request,
 ) -> HttpResponse {
-    let response = crate::admin::router::static_text(content, content_type);
-    with_cors(response, config, origin_of(request))
+    let relative = path.trim_start_matches("/player/");
+    if is_unsafe_relative(relative) {
+        return crate::admin::router::error(404, "asset_not_found", "资源不存在");
+    }
+    if let Ok(bytes) = std::fs::read(page_directory(state).join(relative)) {
+        let response = crate::admin::router::binary(bytes, content_type_of(relative));
+        return with_cors(response, config, origin_of(request));
+    }
+    match relative {
+        "app.js" => with_cors(
+            crate::admin::router::static_text(
+                include_str!("assets/app.js"),
+                "text/javascript; charset=utf-8",
+            ),
+            config,
+            origin_of(request),
+        ),
+        "style.css" => with_cors(
+            crate::admin::router::static_text(
+                include_str!("assets/style.css"),
+                "text/css; charset=utf-8",
+            ),
+            config,
+            origin_of(request),
+        ),
+        _ => crate::admin::router::error(404, "asset_not_found", "资源不存在"),
+    }
+}
+
+fn is_unsafe_relative(relative: &str) -> bool {
+    relative.is_empty()
+        || relative.contains('\\')
+        || relative.contains("..")
+        || relative.starts_with('/')
+        || relative.contains("//")
+        || relative.chars().any(char::is_control)
+}
+
+fn content_type_of(path: &str) -> &'static str {
+    if path.ends_with(".html") {
+        "text/html; charset=utf-8"
+    } else if path.ends_with(".js") || path.ends_with(".mjs") {
+        "text/javascript; charset=utf-8"
+    } else if path.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".woff2") {
+        "font/woff2"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+/// 群内卡片与网页共用的素材路由：图标按定义名、形象按角色 ID。
+fn asset_endpoint(
+    state: &Arc<AdminState>,
+    config: &RuntimeConfig,
+    path: &str,
+    request: &tiny_http::Request,
+) -> HttpResponse {
+    let origin = origin_of(request);
+    let rest = path.trim_start_matches("/api/player/asset/");
+    let Some((kind, file)) = rest.split_once('/') else {
+        return finish(
+            crate::admin::router::error(404, "asset_not_found", "资源不存在"),
+            config,
+            origin,
+        );
+    };
+    let Some(name) = file.strip_suffix(".png") else {
+        return finish(
+            crate::admin::router::error(404, "asset_not_found", "资源不存在"),
+            config,
+            origin,
+        );
+    };
+    let Some(name) = percent_decode(name) else {
+        return finish(
+            crate::admin::router::error(400, "invalid_asset_name", "资源名称不合法"),
+            config,
+            origin,
+        );
+    };
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name.chars().any(char::is_control)
+    {
+        return finish(
+            crate::admin::router::error(400, "invalid_asset_name", "资源名称不合法"),
+            config,
+            origin,
+        );
+    }
+    let assets = crate::render::assets::RealmAssets::discover(&state.plugin_root);
+    let icon = match kind {
+        "icon" => assets.equipment_icon(&name),
+        "portrait" => assets.portrait_by_id(&name),
+        _ => None,
+    };
+    let response = match icon {
+        Some(image) => {
+            let mut bytes = Cursor::new(Vec::new());
+            match image.write_to(&mut bytes, image::ImageFormat::Png) {
+                Ok(()) => crate::admin::router::binary(bytes.into_inner(), "image/png"),
+                Err(_) => crate::admin::router::error(500, "asset_encode_failed", "素材编码失败"),
+            }
+        }
+        None => crate::admin::router::error(404, "asset_not_found", "素材不存在"),
+    };
+    finish(response, config, origin)
+}
+
+/// 解码路径段中的百分号编码（`encodeURIComponent` 产物，不处理 `+`）。
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' => {
+                let hex = bytes.get(index + 1..index + 3)?;
+                let value = u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?;
+                output.push(value);
+                index += 3;
+            }
+            byte => {
+                output.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(output).ok()
 }
 
 fn preflight(config: &RuntimeConfig, request: &tiny_http::Request) -> HttpResponse {

@@ -7,7 +7,7 @@
 use std::{io, io::Cursor, path::Path};
 
 use ab_glyph::PxScale;
-use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
+use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba, imageops};
 use imageproc::{drawing::draw_text_mut, rect::Rect};
 
 use super::assets;
@@ -222,10 +222,24 @@ pub struct EquipmentCardData<'a> {
     pub display_name: &'a str,
     pub system_name: &'a str,
     pub system_id: &'a str,
-    /// 已装备的 `(槽位代码, 物品名)`。
-    pub equipped: &'a [(String, String)],
-    /// 未装备物品 `(物品名, 数量)`。
-    pub bag: &'a [(String, i64)],
+    /// 已装备的槽位。
+    pub equipped: &'a [EquippedSlotView],
+    /// 未装备物品。
+    pub bag: &'a [BagItemView],
+}
+
+#[derive(Clone, Debug)]
+pub struct EquippedSlotView {
+    pub slot_code: String,
+    pub item_name: String,
+    pub quality: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BagItemView {
+    pub name: String,
+    pub quality: String,
+    pub quantity: i64,
 }
 
 const SLOT_ORDER: [(&str, &str); 8] = [
@@ -239,7 +253,89 @@ const SLOT_ORDER: [(&str, &str); 8] = [
     ("accessory_2", "饰品二"),
 ];
 
-/// 渲染装备卡片：八个槽位 + 背包摘要。
+const PANEL_DARK: Rgba<u8> = Rgba([26, 31, 38, 255]);
+const TILE_DARK: Rgba<u8> = Rgba([16, 20, 26, 255]);
+const TILE_EMPTY: Rgba<u8> = Rgba([38, 45, 54, 255]);
+
+/// 品质对应的稀有度色环与星数。
+pub(crate) fn rarity_tier(quality: &str) -> (Rgba<u8>, usize) {
+    match quality {
+        "legendary" => (Rgba([214, 158, 62, 255]), 5),
+        "epic" => (Rgba([142, 92, 190, 255]), 4),
+        "rare" => (Rgba([64, 118, 176, 255]), 3),
+        "fine" => (Rgba([70, 138, 96, 255]), 2),
+        _ => (Rgba([112, 118, 124, 255]), 1),
+    }
+}
+
+/// 品质的中文显示名。
+pub(crate) fn rarity_display(quality: &str) -> &'static str {
+    match quality {
+        "legendary" => "传奇",
+        "epic" => "史诗",
+        "rare" => "珍贵",
+        "fine" => "精良",
+        "common" => "普通",
+        "legacy" => "遗留",
+        _ => "普通",
+    }
+}
+
+/// 深色面板上的次级文字色。
+const PANEL_TEXT: Rgba<u8> = Rgba([196, 203, 212, 255]);
+
+/// 词条代码的中文显示名。
+pub(crate) fn modifier_name(code: &str) -> &str {
+    match code {
+        "max_health" => "生命",
+        "attack" => "攻击",
+        "physical_defense" => "物防",
+        "arcane_defense" => "法防",
+        "soul_defense" => "魂防",
+        "speed" => "速度",
+        "critical_rate" => "暴击",
+        _ => code,
+    }
+}
+
+/// 画一个物品格：深色底 + 稀有度色环 + 居中图标（缺失时画首字）。
+#[allow(clippy::too_many_arguments)]
+fn item_tile(
+    assets: &assets::RealmAssets,
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x: u32,
+    y: u32,
+    size: u32,
+    ring: Rgba<u8>,
+    icon: Option<DynamicImage>,
+    glyph: &str,
+) {
+    fill(image, x, y, size, size, TILE_DARK);
+    let border = 3;
+    fill(image, x, y, size, border, ring);
+    fill(image, x, y + size - border, size, border, ring);
+    fill(image, x, y, border, size, ring);
+    fill(image, x + size - border, y, border, size, ring);
+    let inner = size - 14;
+    if let Some(resized) =
+        icon.map(|icon| icon.resize_exact(inner, inner, image::imageops::FilterType::Lanczos3))
+    {
+        imageops::overlay(image, &resized, (x + 7) as i64, (y + 7) as i64);
+    } else if let Some(font) = assets.font() {
+        let offset = (glyph.chars().count() as i32) * (size as i32) / 4;
+        label(
+            image,
+            font,
+            size as f32 * 0.52,
+            x as i32 + size as i32 / 2 - offset,
+            y as i32 + size as i32 / 3,
+            MUTED_TEXT,
+            glyph,
+        );
+    }
+}
+
+/// 渲染装备卡片：八个槽位徽章 + 背包网格，图标来自素材库。
 pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::Result<()> {
     let assets = assets::RealmAssets::discover(root);
     let accent = system_color(data.system_id);
@@ -252,10 +348,18 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
         HEIGHT - HEADER_HEIGHT,
         accent,
     );
-    fill(&mut image, 36, 92, WIDTH - 72, 252, CARD_BG);
-    fill(&mut image, 36, 360, WIDTH - 72, 144, CARD_BG);
+    fill(&mut image, 36, 92, WIDTH - 72, 268, PANEL_DARK);
+    fill(&mut image, 36, 376, WIDTH - 72, 128, PANEL_DARK);
     if let Some(font) = assets.font() {
-        label(&mut image, font, 30.0, 64, 112, HEADER, data.display_name);
+        label(
+            &mut image,
+            font,
+            30.0,
+            64,
+            112,
+            LIGHT_TEXT,
+            data.display_name,
+        );
         label(
             &mut image,
             font,
@@ -263,48 +367,260 @@ pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::
             64,
             154,
             accent,
-            &format!("{} · 装备栏", data.system_name),
+            &format!("{} · 装备栏 · 装备 查看 <编号> 看详情", data.system_name),
         );
         for (index, (slot_code, slot_name)) in SLOT_ORDER.into_iter().enumerate() {
-            let column = (index % 2) as i32;
-            let row = (index / 2) as i32;
-            let x = 64 + column * 432;
-            let y = 202 + row * 34;
-            let equipped = data
+            let x = 72 + index as u32 * 106;
+            let slot = data
                 .equipped
                 .iter()
-                .find(|(code, _)| code == slot_code)
-                .map(|(_, item)| item.as_str())
-                .unwrap_or("空");
-            label(&mut image, font, 17.0, x, y, MUTED_TEXT, slot_name);
-            label(&mut image, font, 17.0, x + 92, y, BODY_TEXT, equipped);
-        }
-        label(&mut image, font, 20.0, 64, 378, HEADER, "背包");
-        if data.bag.is_empty() {
-            label(&mut image, font, 17.0, 64, 420, MUTED_TEXT, "暂无其他物品");
-        } else {
-            let summary = data
-                .bag
-                .iter()
-                .take(3)
-                .map(|(name, quantity)| format!("{name} ×{quantity}"))
-                .collect::<Vec<_>>()
-                .join("    ");
-            label(&mut image, font, 17.0, 64, 420, BODY_TEXT, &summary);
-            if data.bag.len() > 3 {
+                .find(|slot| slot.slot_code == slot_code);
+            let (ring, icon, glyph) = match slot {
+                Some(slot) => {
+                    let (ring, _) = rarity_tier(&slot.quality);
+                    (
+                        ring,
+                        assets.equipment_icon(&slot.item_name),
+                        slot.item_name.chars().next().unwrap_or('器').to_string(),
+                    )
+                }
+                None => (TILE_EMPTY, None, String::new()),
+            };
+            item_tile(&assets, &mut image, x, 200, 88, ring, icon, &glyph);
+            label(
+                &mut image,
+                font,
+                15.0,
+                x as i32 + 4,
+                294,
+                MUTED_TEXT,
+                slot_name,
+            );
+            if let Some(slot) = slot {
                 label(
                     &mut image,
                     font,
-                    15.0,
-                    64,
-                    456,
-                    MUTED_TEXT,
-                    &format!("其余 {} 种物品已略，详情见网页档案", data.bag.len() - 3),
+                    14.0,
+                    x as i32 + 4,
+                    318,
+                    LIGHT_TEXT,
+                    &truncate_name(&slot.item_name, 6),
                 );
             }
         }
+        label(&mut image, font, 20.0, 64, 394, LIGHT_TEXT, "背包");
+        if data.bag.is_empty() {
+            label(&mut image, font, 16.0, 150, 394, MUTED_TEXT, "暂无其他物品");
+        }
+        for (index, item) in data.bag.iter().enumerate().take(7) {
+            let x = 150 + index as u32 * 100;
+            let (ring, _) = rarity_tier(&item.quality);
+            item_tile(
+                &assets,
+                &mut image,
+                x,
+                376 + 20,
+                64,
+                ring,
+                assets.equipment_icon(&item.name),
+                &item.name.chars().next().unwrap_or('物').to_string(),
+            );
+            label(
+                &mut image,
+                font,
+                13.0,
+                x as i32,
+                464,
+                LIGHT_TEXT,
+                &format!("×{}", item.quantity),
+            );
+        }
+        if data.bag.len() > 7 {
+            label(
+                &mut image,
+                font,
+                14.0,
+                150 + 7 * 100,
+                404,
+                MUTED_TEXT,
+                &format!("+{}", data.bag.len() - 7),
+            );
+        }
     }
     finish(&assets, &mut image, "LUO REALM / 装备", None, path)
+}
+
+fn truncate_name(name: &str, limit: usize) -> String {
+    if name.chars().count() <= limit {
+        name.to_owned()
+    } else {
+        let mut truncated = name.chars().take(limit).collect::<String>();
+        truncated.push('…');
+        truncated
+    }
+}
+
+/// 物品详情卡片数据（`装备 查看 <编号>`）。
+pub struct ItemDetailData<'a> {
+    pub item_id: i64,
+    pub definition_id: &'a str,
+    pub quality: &'a str,
+    pub level: u32,
+    pub quantity: i64,
+    pub equipped_slot: Option<&'a str>,
+    pub modifiers: &'a [(String, i64)],
+}
+
+fn slot_display_name(slot_code: &str) -> &str {
+    SLOT_ORDER
+        .into_iter()
+        .find(|(code, _)| *code == slot_code)
+        .map(|(_, name)| name)
+        .unwrap_or(slot_code)
+}
+
+/// 渲染物品详情卡片：稀有度名条 + 图标 + 词条列表。
+pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::Result<()> {
+    let assets = assets::RealmAssets::discover(root);
+    let (ring, stars) = rarity_tier(data.quality);
+    let mut image = blank();
+    fill(
+        &mut image,
+        0,
+        HEADER_HEIGHT,
+        16,
+        HEIGHT - HEADER_HEIGHT,
+        ring,
+    );
+    fill(&mut image, 36, 92, 320, 412, PANEL_DARK);
+    fill(&mut image, 372, 92, WIDTH - 408, 412, PANEL_DARK);
+    fill(&mut image, 36, 92, 320, 8, ring);
+    if let Some(font) = assets.font() {
+        label(
+            &mut image,
+            font,
+            24.0,
+            56,
+            116,
+            LIGHT_TEXT,
+            &truncate_name(data.definition_id, 9),
+        );
+        label(
+            &mut image,
+            font,
+            16.0,
+            56,
+            152,
+            ring,
+            rarity_display(data.quality),
+        );
+        for star in 0..stars {
+            label(
+                &mut image,
+                font,
+                18.0,
+                56 + star as i32 * 24,
+                178,
+                Rgba([232, 190, 92, 255]),
+                "★",
+            );
+        }
+        item_tile(
+            &assets,
+            &mut image,
+            118,
+            218,
+            156,
+            ring,
+            assets.equipment_icon(data.definition_id),
+            &data
+                .definition_id
+                .chars()
+                .next()
+                .unwrap_or('器')
+                .to_string(),
+        );
+        if let Some(slot) = data.equipped_slot {
+            label(
+                &mut image,
+                font,
+                15.0,
+                56,
+                396,
+                MUTED_TEXT,
+                &format!("已装备 · {}", slot_display_name(slot)),
+            );
+        } else {
+            label(&mut image, font, 15.0, 56, 396, MUTED_TEXT, "未装备");
+        }
+        label(
+            &mut image,
+            font,
+            15.0,
+            56,
+            424,
+            MUTED_TEXT,
+            &format!("编号 #{}", data.item_id),
+        );
+
+        label(&mut image, font, 26.0, 404, 116, LIGHT_TEXT, "物品详情");
+        label(
+            &mut image,
+            font,
+            17.0,
+            404,
+            162,
+            MUTED_TEXT,
+            &format!("强化等级 +{} · 持有 {}", data.level, data.quantity),
+        );
+        if data.modifiers.is_empty() {
+            label(
+                &mut image,
+                font,
+                18.0,
+                404,
+                220,
+                MUTED_TEXT,
+                "暂无词条加成。",
+            );
+        }
+        for (index, (code, value)) in data.modifiers.iter().enumerate().take(7) {
+            let y = 214 + index as i32 * 40;
+            label(
+                &mut image,
+                font,
+                19.0,
+                404,
+                y,
+                PANEL_TEXT,
+                modifier_name(code),
+            );
+            let display = if *value >= 0 {
+                format!("+{value}")
+            } else {
+                value.to_string()
+            };
+            label(
+                &mut image,
+                font,
+                19.0,
+                700,
+                y,
+                Rgba([126, 196, 158, 255]),
+                &display,
+            );
+        }
+        label(
+            &mut image,
+            font,
+            15.0,
+            404,
+            HEIGHT as i32 - 66,
+            MUTED_TEXT,
+            "穿戴：装备 穿戴 <编号> <槽位> · 卸下：装备 卸下 <槽位>",
+        );
+    }
+    finish(&assets, &mut image, "LUO REALM / 物品详情", None, path)
 }
 
 /// 机缘卡片数据。

@@ -18,6 +18,7 @@
 
 # 小游戏部署缓存与本地密钥
 node_modules/
+player_page/dist/
 .vercel/
 .wrangler/
 .dev.vars

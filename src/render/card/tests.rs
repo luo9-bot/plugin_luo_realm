@@ -79,16 +79,52 @@ fn skill_and_equipment_cards_render() {
         display_name: "演示剑修",
         system_name: "剑修",
         system_id: "sword",
-        equipped: &[("main_hand".into(), "精铁长剑".into())],
+        equipped: &[super::EquippedSlotView {
+            slot_code: "main_hand".into(),
+            item_name: "精铁长剑".into(),
+            quality: "rare".into(),
+        }],
         bag: &[
-            ("凝血丹".into(), 3),
-            ("护身符".into(), 1),
-            ("玄铁".into(), 7),
+            super::BagItemView {
+                name: "凝血丹".into(),
+                quality: "fine".into(),
+                quantity: 3,
+            },
+            super::BagItemView {
+                name: "护身符".into(),
+                quality: "epic".into(),
+                quantity: 1,
+            },
+            super::BagItemView {
+                name: "玄铁".into(),
+                quality: "common".into(),
+                quantity: 7,
+            },
         ],
     };
     let equipment_path = output_path("equipment.png");
     equipment(Path::new("."), &equipment_data, &equipment_path).expect("render equipment");
     assert_card(&equipment_path);
+}
+
+#[test]
+fn item_detail_card_renders() {
+    let data = super::ItemDetailData {
+        item_id: 42,
+        definition_id: "精铁长剑",
+        quality: "epic",
+        level: 7,
+        quantity: 1,
+        equipped_slot: Some("main_hand"),
+        modifiers: &[
+            ("attack".into(), 36),
+            ("max_health".into(), 240),
+            ("critical_rate".into(), 2),
+        ],
+    };
+    let path = output_path("item_detail.png");
+    super::item_detail(Path::new("."), &data, &path).expect("render item detail");
+    assert_card(&path);
 }
 
 #[test]

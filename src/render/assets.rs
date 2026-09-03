@@ -83,6 +83,18 @@ impl RealmAssets {
             .join(format!("{}.png", realm_index.min(9)));
         image::open(path).ok()
     }
+
+    /// 装备图标：按物品定义确定性挑选，同一定义始终得到同一张图。
+    pub fn equipment_icon(&self, definition_id: &str) -> Option<DynamicImage> {
+        let directory = self.root.join("equipment");
+        let images = png_files(&directory);
+        if images.is_empty() {
+            return None;
+        }
+        let digest = Sha256::digest(definition_id.as_bytes());
+        let index = u64::from_be_bytes(digest[0..8].try_into().ok()?) as usize % images.len();
+        image::open(&images[index]).ok()
+    }
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {

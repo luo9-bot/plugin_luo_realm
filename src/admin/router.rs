@@ -166,7 +166,11 @@ fn json(status: u16, value: serde_json::Value) -> HttpResponse {
 }
 
 pub(crate) fn html(content: &str) -> HttpResponse {
-    let response = Response::from_data(content.as_bytes().to_vec());
+    html_bytes(content.as_bytes().to_vec())
+}
+
+pub(crate) fn html_bytes(bytes: Vec<u8>) -> HttpResponse {
+    let response = Response::from_data(bytes);
     let response = with_header(response, "Content-Type", "text/html; charset=utf-8");
     secure_headers(with_header(
         response,

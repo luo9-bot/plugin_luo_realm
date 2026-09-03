@@ -194,6 +194,59 @@ pub fn refine(transaction: &Transaction<'_>, user_id: u64, item_id: i64) -> Data
         .map_err(DatabaseError::from_sqlite)
 }
 
+/// 单件物品的完整视图（含词条），供 `装备 查看 <编号>` 使用。
+pub struct ItemDetail {
+    pub item_id: i64,
+    pub definition_id: String,
+    pub quantity: i64,
+    pub quality: String,
+    pub level: u32,
+    pub equipped_slot: Option<String>,
+    pub modifiers: Vec<(String, i64)>,
+}
+
+/// 查询本人某件物品的详情；不存在或不属于本人时返回 `None`。
+pub fn item_detail(
+    transaction: &Transaction<'_>,
+    user_id: u64,
+    item_id: i64,
+) -> DatabaseResult<Option<ItemDetail>> {
+    let id = player_id(user_id)?;
+    let row = transaction
+        .query_row(
+            "SELECT item.definition_id, item.quantity, item.quality, item.level,
+                    equipped.slot_code
+             FROM item_instances item
+             LEFT JOIN equipment_loadouts equipped USING(item_instance_id)
+             WHERE item.item_instance_id=?1 AND item.player_id=?2",
+            params![item_id, id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, u32>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(DatabaseError::from_sqlite)?;
+    let Some((definition_id, quantity, quality, level, equipped_slot)) = row else {
+        return Ok(None);
+    };
+    let modifiers = modifiers(transaction, item_id)?;
+    Ok(Some(ItemDetail {
+        item_id,
+        definition_id,
+        quantity,
+        quality,
+        level,
+        equipped_slot,
+        modifiers,
+    }))
+}
+
 fn modifiers(transaction: &Transaction<'_>, item_id: i64) -> DatabaseResult<Vec<(String, i64)>> {
     let mut statement = transaction
         .prepare(

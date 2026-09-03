@@ -171,8 +171,9 @@ SQLite 会自动恢复。配置和 Token 使用 `.new/.bak` 可恢复替换，�
 
 `菜单`、`体系`、`状态`、`技能`、`装备`、`每日事件` 和 `世界事件` 默认返回图片卡片，
 不附带文字：菜单卡按场景分组列出全部命令，体系卡展示 11 个体系的定位，技能卡带熟练度
-刻度，装备卡含八槽位与背包摘要，机缘卡与世界事件卡展示当日事件与目标进度。卡片渲染失败
-时自动回退为文字回复，不影响权威结果。
+刻度，装备卡以素材库图标呈现八槽位与背包网格，物品详情卡展示稀有度星级与词条，机缘卡与
+世界事件卡展示当日事件与目标进度。卡片渲染失败时自动回退为文字回复，不影响权威结果。
+样例可用 `cargo run --example render_samples` 输出到 `tests/img` 人工查看。
 
 战斗与成长命令说明：
 
@@ -180,25 +181,39 @@ SQLite 会自动恢复。配置和 Token 使用 `.new/.bak` 可恢复替换，�
   例如 `技能 sword.basic 研习`。
 - `战术` 列出可选战术；`战术 <代码>` 设置决斗自动战术，可选
   `balanced / aggressive / defensive / sustain / control`。
-- `装备` 查看背包和穿戴状态；`装备 穿戴 <物品编号> <槽位>` 穿戴，`装备 卸下 <槽位>` 卸下。
-  槽位代码为 `main_hand / off_hand / head / body / hands / feet / accessory_1 / accessory_2`。
+- `装备` 查看背包和穿戴状态；`装备 查看 <物品编号>`（或直接 `装备 <编号>`）查看单件物品
+  详情卡（稀有度、星级、强化等级与词条）；`装备 穿戴 <物品编号> <槽位>` 穿戴，
+  `装备 卸下 <槽位>` 卸下。槽位代码为 `main_hand / off_hand / head / body / hands / feet /
+  accessory_1 / accessory_2`。
 - `修行行动 [行动]` 是每天一次的主要修行动作，可选 `吐纳 / 闭关 / 研习 / 历练 / 淬炼 / 休养`
   （默认 `吐纳`），影响修为进度、熟练度、疲劳、伤势和心境。
 - `主页` 签发一次性网页票据并返回专属档案页链接（10 分钟内有效、仅可打开一次）。
 
-## 玩家网页（只读档案页）
+## 玩家网页（Vue 3 · 只读档案页）
 
-`主页` 命令返回形如 `{base_url}?ticket=...` 的专属链接。页面用票据换取短期会话后，
-以手机优先的布局展示档案（体系、境界、战力、今日状态）、资产流水、技能熟练度、
-背包装备和最近战斗。
+`主页` 命令返回形如 `{base_url}?ticket=...` 的专属链接。页面使用 Vue 3 + TypeScript +
+Vite 构建（源码位于 `player_page/`），以游戏化深色界面展示角色卡、装备栏与背包（带素材
+图标）、技能熟练度、资产流水和最近战斗。
+
+构建与部署：
+
+```powershell
+cd player_page
+npm install
+npm run build            # 产物在 player_page/dist
+Copy-Item -Recurse -Force player_page\dist\* data\luo_realm\player_page\
+```
+
+插件优先伺服 `data/luo_realm/player_page/` 下的构建产物；目录不存在时回退为内嵌的精简
+页面。部署到 Cloudflare Pages 时直接发布 `dist`，并以 `VITE_API_BASE` 指定插件 API 地址
+（跨域来源需加入 `[player_web].allowed_origins`）。
 
 安全模型（设计方案书 20.3、27.2）：
 
 - 票据绑定玩家与 `profile:read` 范围，一次性使用，nonce 持久化于 `player_web_tickets`。
 - 会话为无状态 HMAC 签名值，默认 2 小时有效；轮换管理 Token 会立即失效全部票据与会话。
 - 接口全部只读：网页永远不会替玩家生成每日状态、解锁技能或修改任何权威状态。
-- 跨域访问需在 `[player_web].allowed_origins` 白名单内（用于 Cloudflare Pages 部署），
-  空白名单时仅同源可用。
+- `/api/player/asset/` 提供装备图标与角色立绘（与群内卡片同一挑选规则），仅暴露游戏素材。
 
 启用方式：把 `data/luo_realm/config/config.toml` 中 `[player_web].enabled` 改为 `true`，
 并将 `base_url` 指向可访问的页面地址（本地默认 `http://127.0.0.1:18765/player`）。本地联调可运行

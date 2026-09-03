@@ -28,7 +28,10 @@ pub fn battle(
     battle::render(root, snapshot, outcome, path)
 }
 
-pub use card::{EquipmentCardData, SkillCardData, SystemCardEntry};
+pub use card::{
+    BagItemView, EquipmentCardData, EquippedSlotView, ItemDetailData, SkillCardData,
+    SystemCardEntry,
+};
 
 pub fn menu(root: &Path, path: &Path) -> io::Result<()> {
     card::menu(root, path)
@@ -44,6 +47,10 @@ pub fn skills(root: &Path, data: &SkillCardData<'_>, path: &Path) -> io::Result<
 
 pub fn equipment(root: &Path, data: &EquipmentCardData<'_>, path: &Path) -> io::Result<()> {
     card::equipment(root, data, path)
+}
+
+pub fn item_detail(root: &Path, data: &ItemDetailData<'_>, path: &Path) -> io::Result<()> {
+    card::item_detail(root, data, path)
 }
 
 pub struct DestinyCardData<'a> {
