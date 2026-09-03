@@ -114,9 +114,6 @@ pub fn handle_message_with_config(
 #[unsafe(no_mangle)]
 pub extern "C" fn plugin_main() {
     let root = paths::plugin_root();
-    if let Err(error) = paths::migrate_legacy_layout() {
-        eprintln!("[Luo Realm] legacy layout migration failed: {error}");
-    }
     if let Err(error) = render::assets::recover_asset_tree(&root) {
         eprintln!("[Luo Realm] asset recovery failed: {error}");
     }
