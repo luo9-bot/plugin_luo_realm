@@ -83,7 +83,13 @@ pub(crate) fn fill(
 }
 
 /// 细横线（单像素），端点任意方向。
-fn hline(image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, x0: i32, x1: i32, y: i32, color: Rgba<u8>) {
+pub(crate) fn hline(
+    image: &mut ImageBuffer<Rgba<u8>, Vec<u8>>,
+    x0: i32,
+    x1: i32,
+    y: i32,
+    color: Rgba<u8>,
+) {
     if x0 == x1 {
         return;
     }
