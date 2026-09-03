@@ -6,9 +6,12 @@
  *   （常量时间比较），载荷上限 256 KB，仅允许写入自己的 D1。
  * - GET  /api/state          页面 → CF：凭据 = 页面令牌（查 D1 校验有效期），
  *   只返回该令牌对应的快照，绝不返回任何其他玩家数据。
+ * - GET  /api/player/asset/* 页面 → CF → 源站：素材（图标 / 形象）按前缀
+ *   透传，不转发任何凭据，带一天浏览器缓存。
  * - POST /api/command        页面 → CF → 源站：令牌校验通过后，转发到
  *   PLUGIN_URL（环境变量，玩家不可见）。只转发固定路径，强制 HTTPS，
  *   响应透传但不回显任何密钥。
+ * - 跨源：仅 PAGES_ORIGIN 白名单内的页面来源获得 CORS 响应头。
  *
  * 不记录密钥与令牌；所有 SQL 使用预编译语句。
  */
@@ -38,12 +41,15 @@ function bearerOf(request) {
 function json(status, payload) {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      // 经外部 CDN 回源时禁止缓存：快照与会话状态绑定，缓存会导致串号。
+      "Cache-Control": "no-store",
+    },
   });
 }
 
-export default {
-  async fetch(request, env) {
+async function handle(request, env) {
     const url = new URL(request.url);
     const now = Math.floor(Date.now() / 1000);
 
@@ -95,6 +101,27 @@ export default {
       return json(200, { ok: true, data: JSON.parse(row.state_json) });
     }
 
+    // 素材（物品图标 / 玩家形象）由 <img> 直接引用，无法携带 Authorization，
+    // 源站对素材端点本身公开；Worker 仅按前缀透传，不转发任何凭据。
+    if (request.method === "GET" && url.pathname.startsWith("/api/player/asset/")) {
+      const origin = (env.PLUGIN_URL ?? "").trim();
+      if (!origin.startsWith("https://") || origin.includes("?") || origin.includes("#")) {
+        return json(500, { ok: false, error: { code: "origin_misconfigured", message: "server error" } });
+      }
+      try {
+        const upstream = await fetch(`${origin}${url.pathname}${url.search}`);
+        return new Response(upstream.body, {
+          status: upstream.status,
+          headers: {
+            "Content-Type": upstream.headers.get("Content-Type") ?? "application/octet-stream",
+            "Cache-Control": "public, max-age=86400",
+          },
+        });
+      } catch {
+        return json(502, { ok: false, error: { code: "origin_unreachable", message: "server error" } });
+      }
+    }
+
     if (request.method === "POST" && url.pathname === "/api/command") {
       const pluginToken = bearerOf(request);
       if (!constantTimeEquals(pluginToken, env.PLUGIN_TOKEN)) {
@@ -127,21 +154,60 @@ export default {
       if (!origin.startsWith("https://") || origin.includes("?") || origin.includes("#")) {
         return json(500, { ok: false, error: { code: "origin_misconfigured", message: "server error" } });
       }
-      const forwarded = await fetch(`${origin}${COMMAND_PATH}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${env.PLUGIN_TOKEN}`,
-        },
-        body: JSON.stringify(payload),
-      });
+      let forwarded;
+      try {
+        forwarded = await fetch(`${origin}${COMMAND_PATH}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${env.PLUGIN_TOKEN}`,
+          },
+          body: JSON.stringify(payload),
+        });
+      } catch {
+        return json(502, { ok: false, error: { code: "origin_unreachable", message: "server error" } });
+      }
       const text = await forwarded.text();
       return new Response(text, {
         status: forwarded.status,
-        headers: { "Content-Type": "application/json; charset=utf-8" },
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
       });
     }
 
     return json(404, { ok: false, error: { code: "not_found", message: "not found" } });
+}
+
+/**
+ * 跨源边界：Pages 站点（PAGES_ORIGIN 白名单）跨源调用 API 时，浏览器对
+ * 带 Authorization / JSON body 的请求先发预检，由统一入口短路应答；命中
+ * 白名单的业务响应统一补 CORS 头。素材 <img> 属 no-cors 请求，不涉及预检。
+ */
+export default {
+  async fetch(request, env) {
+    const origin = request.headers.get("Origin") ?? "";
+    const allowed = origin !== "" && origin === (env.PAGES_ORIGIN ?? "").trim();
+    if (request.method === "OPTIONS") {
+      if (!allowed) {
+        return json(403, { ok: false, error: { code: "origin_forbidden", message: "forbidden" } });
+      }
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": origin,
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Authorization, Content-Type",
+          "Access-Control-Max-Age": "86400",
+        },
+      });
+    }
+    const response = await handle(request, env);
+    if (allowed) {
+      response.headers.set("Access-Control-Allow-Origin", origin);
+      response.headers.set("Vary", "Origin");
+    }
+    return response;
   },
 };
