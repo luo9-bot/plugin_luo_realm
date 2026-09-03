@@ -1,6 +1,16 @@
 /** 玩家网页 API：一次性票据换会话，之后以 Bearer 会话调用只读接口。 */
 
 export const API_BASE: string = import.meta.env.VITE_API_BASE ?? "";
+
+/**
+ * 数据面模式：
+ * - `direct`（默认）：页面直连插件接口（本地联调）。
+ * - `cf`：页面只与 Cloudflare Worker 通信，档案读自插件推送的快照，
+ *   写操作经 Worker 以服务端环境变量转发回源站。
+ */
+export const DATA_MODE: "direct" | "cf" =
+  (import.meta.env.VITE_DATA_MODE as "direct" | "cf" | undefined) ?? "direct";
+
 const SESSION_KEY = "lr-player-session";
 
 export interface Profile {
@@ -80,6 +90,11 @@ export function sessionToken(): string | null {
   return sessionStorage.getItem(SESSION_KEY);
 }
 
+/** Cloudflare 模式：`主页` 链接直接携带页面会话令牌。 */
+export function adoptPageToken(token: string): void {
+  sessionStorage.setItem(SESSION_KEY, token);
+}
+
 export function dropSession(): void {
   sessionStorage.removeItem(SESSION_KEY);
 }
@@ -127,23 +142,73 @@ async function request<T>(
   return payload.data;
 }
 
+interface StateSnapshot {
+  profile: Profile;
+  wallet: Wallet;
+  skills: Skills;
+  equipment: Equipment;
+  battles: Battles;
+}
+
+let stateSnapshot: StateSnapshot | null = null;
+let statePromise: Promise<void> | null = null;
+
+async function ensureState(): Promise<void> {
+  if (stateSnapshot) {
+    return;
+  }
+  if (!statePromise) {
+    statePromise = request<StateSnapshot>("GET", "/api/state")
+      .then((payload) => {
+        stateSnapshot = payload;
+      })
+      .finally(() => {
+        statePromise = null;
+      });
+  }
+  await statePromise;
+}
+
+export async function refreshState(): Promise<void> {
+  if (DATA_MODE !== "cf") {
+    return;
+  }
+  stateSnapshot = null;
+  await ensureState();
+}
+
 export function getProfile(): Promise<Profile> {
+  if (DATA_MODE === "cf") {
+    return ensureState().then(() => stateSnapshot!.profile);
+  }
   return request("GET", "/api/player/profile");
 }
 
 export function getWallet(): Promise<Wallet> {
+  if (DATA_MODE === "cf") {
+    return ensureState().then(() => stateSnapshot!.wallet);
+  }
   return request("GET", "/api/player/wallet");
 }
 
 export function getSkills(): Promise<Skills> {
+  if (DATA_MODE === "cf") {
+    return ensureState().then(() => stateSnapshot!.skills);
+  }
   return request("GET", "/api/player/skills");
 }
 
 export function getEquipment(): Promise<Equipment> {
+  if (DATA_MODE === "cf") {
+    return ensureState().then(() => stateSnapshot!.equipment);
+  }
   return request("GET", "/api/player/equipment");
 }
 
 export function getBattles(): Promise<Battles> {
+  if (DATA_MODE === "cf") {
+    return ensureState().then(() => stateSnapshot!.battles);
+  }
   return request("GET", "/api/player/battles");
 }
 
@@ -151,7 +216,19 @@ export function getPortraits(): Promise<{ portraits: string[] }> {
   return request("GET", "/api/player/portraits");
 }
 
-export function setCharacter(characterId: string): Promise<{ character_id: string }> {
+export async function setCharacter(
+  characterId: string,
+): Promise<{ character_id: string }> {
+  if (DATA_MODE === "cf") {
+    const result = await request<{ character_id: string }>("POST", "/api/command", {
+      token: sessionToken(),
+      action: "set_character",
+      payload: { character_id: characterId },
+    });
+    stateSnapshot = null;
+    await ensureState();
+    return result;
+  }
   return request("POST", "/api/player/character", { character_id: characterId });
 }
 

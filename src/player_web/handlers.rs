@@ -11,12 +11,13 @@ use serde::Deserialize;
 
 use crate::admin::router::{AdminState, HttpResponse};
 use crate::config::RuntimeConfig;
-use crate::database::{Database, DatabaseError, unix_timestamp};
+use crate::database::{Database, DatabaseError, DatabaseResult, unix_timestamp};
 use crate::domain::error_code::StableErrorCode;
 use crate::domain::shared::PlatformUserId;
 
 use super::{
     session::{self, Session},
+    sync,
     ticket::{self, TicketError},
     views,
 };
@@ -47,6 +48,9 @@ pub fn route(
         }
         (tiny_http::Method::Post, "/api/player/character") => {
             Some(set_character_endpoint(request, state, &config))
+        }
+        (tiny_http::Method::Post, "/api/player/command") => {
+            Some(command_endpoint(request, state, &config))
         }
         (tiny_http::Method::Post, "/api/player/session") => {
             Some(exchange_endpoint(request, state, &config))
@@ -380,6 +384,125 @@ fn rarity_meta_endpoint(state: &Arc<AdminState>, config: &RuntimeConfig) -> Http
     )
 }
 
+#[derive(Deserialize)]
+struct CommandRequest {
+    token: String,
+    action: String,
+    #[serde(default)]
+    payload: serde_json::Value,
+}
+
+/// Cloudflare Worker 回传的写操作通道。
+///
+/// 严格鉴权链：`Bearer` 必须等于高熵 `sync_token`（常量时间比较）→
+/// `token` 必须命中本地页面会话表且未过期 → 动作白名单 → 载荷校验。
+/// 未配置同步时端点整体隐藏，返回 404。
+fn command_endpoint(
+    request: &mut tiny_http::Request,
+    state: &Arc<AdminState>,
+    config: &RuntimeConfig,
+) -> HttpResponse {
+    let origin = origin_of(request);
+    if !config.player_web.sync_enabled() {
+        return finish(
+            crate::admin::router::error(404, "not_found", "接口不存在"),
+            config,
+            origin,
+        );
+    }
+    let channel = request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("Authorization"))
+        .and_then(|header| header.value.as_str().strip_prefix("Bearer "))
+        .map(str::to_owned);
+    let Some(channel) = channel else {
+        return finish(
+            crate::admin::router::error(401, "channel_unauthorized", "缺少回传凭据"),
+            config,
+            origin,
+        );
+    };
+    if !sync::verify_sync_token(&config.player_web, &channel) {
+        return finish(
+            crate::admin::router::error(403, "channel_forbidden", "回传凭据无效"),
+            config,
+            origin,
+        );
+    }
+
+    let body = match crate::admin::router::read_body(request, 2_048) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let command: CommandRequest = match serde_json::from_slice(&body) {
+        Ok(command) => command,
+        Err(_) => {
+            return finish(
+                crate::admin::router::error(400, "invalid_command", "命令格式不合法"),
+                config,
+                origin,
+            );
+        }
+    };
+    if command.token.len() != 43 {
+        // 页面令牌固定为 32 字节 URL-safe 编码长度，长度不符直接拒绝。
+        return finish(
+            crate::admin::router::error(401, "session_invalid", "页面会话无效"),
+            config,
+            origin,
+        );
+    }
+
+    let now = unix_timestamp();
+    let outcome = Database::open_request(&state.database_path).and_then(|mut database| {
+        let db_transaction = database.immediate_transaction()?;
+        let Some(session) = sync::verify_page_session(&db_transaction, &command.token, now)? else {
+            return Err(DatabaseError::InvalidData("页面会话无效或已过期".into()));
+        };
+        if command.action != "set_character" {
+            return Err(DatabaseError::InvalidData("未授权的动作".into()));
+        }
+        let Some(character_id) = command
+            .payload
+            .get("character_id")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+        else {
+            return Err(DatabaseError::InvalidData("缺少 character_id".into()));
+        };
+        let assets = crate::render::assets::RealmAssets::discover(&state.plugin_root);
+        if assets.portrait_by_id(&character_id).is_none() {
+            return Err(DatabaseError::InvalidData("该形象不存在".into()));
+        }
+        apply_character_change(
+            &db_transaction,
+            session.platform_user_id,
+            &character_id,
+            &format!("player_page:{}", session.platform_user_id),
+        )?;
+        db_transaction
+            .commit()
+            .map_err(DatabaseError::from_sqlite)?;
+        Ok(serde_json::json!({
+            "action": command.action,
+            "character_id": character_id,
+        }))
+    });
+
+    let response = match outcome {
+        Ok(value) => crate::admin::router::ok(value),
+        Err(DatabaseError::InvalidData(reason)) => {
+            crate::admin::router::error(400, "command_rejected", &reason)
+        }
+        Err(DatabaseError::NotFound) => {
+            crate::admin::router::error(404, "player_not_found", "档案不存在")
+        }
+        Err(error) => crate::admin::router::error(500, error.error_code(), "命令执行失败"),
+    };
+    finish(response, config, origin)
+}
+
 /// 可选角色形象列表（需要会话）。
 fn portraits_endpoint(
     request: &tiny_http::Request,
@@ -405,6 +528,37 @@ fn portraits_endpoint(
 #[derive(Deserialize)]
 struct CharacterRequest {
     character_id: String,
+}
+
+/// 应用形象变更：校验归属、写入并审计（网页两个写入入口共用）。
+fn apply_character_change(
+    transaction: &rusqlite::Transaction<'_>,
+    platform_user_id: u64,
+    character_id: &str,
+    operator: &str,
+) -> DatabaseResult<()> {
+    let row_id = i64::try_from(platform_user_id).map_err(|_| DatabaseError::InvalidIdentifier)?;
+    let updated = transaction
+        .execute(
+            "UPDATE player_profiles SET character_id=?2 WHERE player_id=?1",
+            rusqlite::params![row_id, character_id],
+        )
+        .map_err(DatabaseError::from_sqlite)?;
+    if updated == 0 {
+        return Err(DatabaseError::NotFound);
+    }
+    crate::database::admin::audit_success(
+        transaction,
+        crate::database::admin::AuditEntry {
+            operator,
+            action: "player.set_character",
+            target_type: "player",
+            target_id: &platform_user_id.to_string(),
+            reason: "网页档案页更换形象",
+            before: None,
+            after: Some(serde_json::json!({ "character_id": character_id })),
+        },
+    )
 }
 
 /// 设置角色形象：网页上唯一的外观类写入，不触及任何数值资产。
@@ -443,30 +597,14 @@ fn set_character_endpoint(
             origin,
         );
     }
+    let operator = format!("player:{}", session.platform_user_id);
     let outcome = Database::open_request(&state.database_path).and_then(|mut database| {
         let db_transaction = database.immediate_transaction()?;
-        let row_id = i64::try_from(session.platform_user_id)
-            .map_err(|_| DatabaseError::InvalidIdentifier)?;
-        let updated = db_transaction
-            .execute(
-                "UPDATE player_profiles SET character_id=?2 WHERE player_id=?1",
-                rusqlite::params![row_id, character_id],
-            )
-            .map_err(DatabaseError::from_sqlite)?;
-        if updated == 0 {
-            return Err(DatabaseError::NotFound);
-        }
-        crate::database::admin::audit_success(
+        apply_character_change(
             &db_transaction,
-            crate::database::admin::AuditEntry {
-                operator: &format!("player:{}", session.platform_user_id),
-                action: "player.set_character",
-                target_type: "player",
-                target_id: &session.platform_user_id.to_string(),
-                reason: "网页档案页更换形象",
-                before: None,
-                after: Some(serde_json::json!({ "character_id": character_id })),
-            },
+            session.platform_user_id,
+            &character_id,
+            &operator,
         )?;
         db_transaction
             .commit()

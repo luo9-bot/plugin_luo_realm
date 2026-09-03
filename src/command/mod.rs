@@ -247,7 +247,11 @@ fn systems(database: &mut Database, root: &Path) -> Result<String, DatabaseError
     ))
 }
 
-/// 签发一次性网页票据并返回档案页链接（设计方案书 20.3）。
+/// 生成档案页链接（设计方案书 20.3）。
+///
+/// Cloudflare 推送模式：先把快照同步到 Worker，返回 `{base_url}?token=...`
+/// （页面只与 Cloudflare 通信，源站不暴露）；直连模式：签发一次性票据，
+/// 返回 `{base_url}?ticket=...` 指向插件自带页面。
 fn home_page(
     database: &mut Database,
     root: &Path,
@@ -257,6 +261,19 @@ fn home_page(
     if !config.enabled {
         return Ok("玩家网页尚未启用，请联系管理员在配置中开启。".into());
     }
+    if config.sync_enabled() {
+        return match crate::player_web::sync::push_snapshot(database, config, user_id) {
+            Ok(session) => Ok(format!(
+                "你的专属档案页已生成（{0} 分钟内有效）：\n{1}?token={2}\n页面只读，修行操作仍在群聊完成。",
+                config.session_ttl_minutes, config.base_url, session.token
+            )),
+            Err(error) => {
+                eprintln!("[Luo Realm] player page sync failed: {error}");
+                Ok("档案同步暂时不可用（云端未响应），请稍后重试。".into())
+            }
+        };
+    }
+
     let token_path = crate::paths::data_directory(root).join("admin.token");
     let token = crate::admin::auth::AdminToken::load_or_create(&token_path)
         .map_err(|error| DatabaseError::InvalidData(format!("签名密钥不可用：{error}")))?;

@@ -7,6 +7,7 @@
 
 mod handlers;
 pub mod session;
+pub mod sync;
 pub mod ticket;
 mod views;
 

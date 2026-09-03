@@ -268,9 +268,13 @@ impl Default for AdminConfig {
 
 /// 玩家网页（只读档案页）配置。
 ///
-/// 群聊命令 `主页` 签发一次性票据，返回 `{base_url}?ticket=...`；页面用票据
-/// 换取短期会话后只能调用 `profile:read` 范围内的只读接口。写入型操作仍由
-/// 群聊命令完成（设计方案书 20.3、27.2）。
+/// 两种部署形态：
+/// - **直连**（本地）：不配置 `sync_url`，`主页` 签发一次性票据，页面直接
+///   调用插件接口，此时 `base_url` 指向插件自带的 `/player` 页面。
+/// - **Cloudflare**（可选增强）：配置 `sync_url` 与 `sync_token` 后，插件把
+///   档案快照主动推送到 Cloudflare Worker（出站请求，源站不暴露公网），
+///   `主页` 返回 `{base_url}?token=...` 指向 Pages 静态站点；页面写操作由
+///   Worker 以服务端环境变量中隐藏的源站地址转发回来。
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PlayerWebConfig {
@@ -283,6 +287,10 @@ pub struct PlayerWebConfig {
     pub ticket_ttl_minutes: u32,
     /// 网页会话有效期（分钟）。
     pub session_ttl_minutes: u32,
+    /// Cloudflare Worker 的快照接收地址；为空表示直连模式。
+    pub sync_url: String,
+    /// 与 Worker 共享的推送/回传密钥，至少 32 字符。
+    pub sync_token: String,
 }
 
 impl Default for PlayerWebConfig {
@@ -293,11 +301,18 @@ impl Default for PlayerWebConfig {
             allowed_origins: Vec::new(),
             ticket_ttl_minutes: 10,
             session_ttl_minutes: 120,
+            sync_url: String::new(),
+            sync_token: String::new(),
         }
     }
 }
 
 impl PlayerWebConfig {
+    /// 是否处于 Cloudflare 推送模式。
+    pub fn sync_enabled(&self) -> bool {
+        !self.sync_url.trim().is_empty() || !self.sync_token.trim().is_empty()
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         if !self.enabled {
             return Ok(());
@@ -323,6 +338,18 @@ impl PlayerWebConfig {
         if !(5..=1_440).contains(&self.session_ttl_minutes) {
             return Err(ConfigError::InvalidPlayerWeb(
                 "session ttl must be between 5 and 1440 minutes".into(),
+            ));
+        }
+        if self.sync_enabled()
+            && (!valid_web_url(&self.sync_url) || self.sync_token.trim().len() < 32)
+        {
+            return Err(ConfigError::InvalidPlayerWeb(
+                "sync_url must be an http(s) URL and sync_token at least 32 characters".into(),
+            ));
+        }
+        if !self.sync_enabled() && !self.sync_token.trim().is_empty() {
+            return Err(ConfigError::InvalidPlayerWeb(
+                "sync_token is set but sync_url is empty".into(),
             ));
         }
         Ok(())

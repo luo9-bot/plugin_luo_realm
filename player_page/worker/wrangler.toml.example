@@ -1,0 +1,18 @@
+# 复制为 wrangler.toml 并填写实际值；PLUGIN_TOKEN 用 secret 管理，不要写进本文件。
+name = "luo-realm-page"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 与 Pages 同域时按需调整；Worker 只应覆盖 /api/* 路径。
+# routes = [
+#   { pattern = "luo-realm.example.workers.dev/api/*", zone_name = "example.dev" }
+# ]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "luo-realm-page"
+database_id = "<在 Cloudflare 控制台创建 D1 后填写>"
+
+[vars]
+# 源站地址（HTTPS、无路径、无查询）——对玩家完全不可见。
+PLUGIN_URL = "https://api.example.com"

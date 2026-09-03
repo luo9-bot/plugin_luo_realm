@@ -5,6 +5,7 @@ import {
   hasSession,
   sessionToken,
   dropSession,
+  adoptPageToken,
   getProfile,
   type Profile,
 } from "./api";
@@ -59,7 +60,16 @@ function onSessionExpired(): void {
 }
 
 onMounted(async () => {
-  const ticket = new URLSearchParams(location.search).get("ticket");
+  const params = new URLSearchParams(location.search);
+  const pageToken = params.get("token");
+  if (pageToken) {
+    // Cloudflare 模式：主页 链接直接携带页面会话令牌。
+    history.replaceState(null, "", location.pathname);
+    adoptPageToken(pageToken);
+    enter();
+    return;
+  }
+  const ticket = params.get("ticket");
   if (ticket) {
     history.replaceState(null, "", location.pathname);
     try {

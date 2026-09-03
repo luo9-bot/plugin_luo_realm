@@ -220,57 +220,70 @@ Copy-Item -Recurse -Force player_page\dist\* data\luo_realm\player_page\
 并将 `base_url` 指向可访问的页面地址（本地默认 `http://127.0.0.1:18765/player`）。本地联调可运行
 `cargo run --example player_web_dev`，它会启动一个种子角色齐全的演示服务器并打印测试票据链接。
 
-## Cloudflare Pages 部署指南
+## Cloudflare 双层部署指南（源站不暴露）
 
-部署形态：页面托管在 Cloudflare Pages，玩家 API 由插件服务器经 HTTPS 反向代理提供，
-两者通过一次性票据（`?ticket=`）与跨域白名单协作。
+部署形态与御空试炼同源：**插件只发起出站请求**，把档案快照推送到 Cloudflare Worker
+（写入 D1）；玩家页面是纯静态站点（Pages），读取只来自 Cloudflare；写操作由 Worker 用
+**环境变量中隐藏的源站地址**转发回插件。插件服务器不需要公网 IP、不开任何入站端口。
+不部署此页面时插件完整可用——页面是可选增强。
 
-前置条件：
-
-- 插件服务器可达公网：为管理端口配置 HTTPS 反向代理（Caddy/Nginx + 域名证书），
-  该地址即玩家 API 地址，下文记作 `https://api.example.com`。
-- Node 18+ 与 npm。
-
-第一步，构建页面：
-
-```powershell
-cd player_page
-npm install
-$env:VITE_API_BASE = "https://api.example.com"   # API 地址，构建时注入
-npm run build                                     # 产物在 player_page/dist
+```text
+插件 ──出站推送(快照)──▶ CF Worker ──▶ D1 ◀──页面读取
+页面 ──写操作──▶ CF Worker ──(env PLUGIN_URL, 隐藏)──▶ 插件 /api/player/command
 ```
 
-第二步，发布到 Cloudflare Pages（二选一）：
+鉴权链（三层，全部严格校验）：
+
+1. 插件 → Worker：`Authorization: Bearer <SYNC_TOKEN>`（≥32 字符高熵，常量时间比较）。
+2. 页面 → Worker：页面令牌（256 位随机、D1 校验有效期）。
+3. Worker → 插件：同一 `SYNC_TOKEN` 常量时间校验 + 页面令牌在插件本地会话表复核，
+   动作白名单（当前仅 `set_character`），全部写审计；SQL 全部预编译。
+
+部署步骤：
 
 ```powershell
-# 方式 A：控制台 Direct Upload —— Pages → Create project → 上传 dist 目录
-# 方式 B：Wrangler CLI
+# 1. 创建 D1 并建表
+npx wrangler d1 create luo-realm-page
+npx wrangler d1 execute luo-realm-page --file player_page/worker/schema.sql --remote
+
+# 2. 部署 Worker（复制 wrangler.toml.example 填入 database_id）
+Copy-Item player_page\worker\wrangler.toml.example player_page\worker\wrangler.toml
+#   编辑 wrangler.toml：database_id、PLUGIN_URL（插件 API 的内网/公网 HTTPS 地址）
+npx wrangler deploy
+npx wrangler secret put PLUGIN_TOKEN     # 生成 ≥32 字符随机串，与插件保持一致
+
+# 3. 构建并发布静态页面
+cd player_page
+npm install
+$env:VITE_API_BASE = ""                  # 页面与 Worker 同域时可留空
+$env:VITE_DATA_MODE = "cf"               # 走快照/回传通道
+npm run build
 npx wrangler pages deploy dist --project-name luo-realm
 ```
 
-记下分配的域名，例如 `https://luo-realm.pages.dev`。
-
-第三步，插件配置（`data/luo_realm/config/config.toml`）：
+第四步，插件配置（`data/luo_realm/config/config.toml`）：
 
 ```toml
 [player_web]
 enabled = true
-base_url = "https://luo-realm.pages.dev"          # 群内「主页」链接指向 Pages
-allowed_origins = ["https://luo-realm.pages.dev"] # Pages 跨域调用 API 的白名单
+base_url = "https://luo-realm.pages.dev"   # 群内「主页」链接指向 Pages
+sync_url = "https://<worker 地址>/api/plugin/sync"
+sync_token = "<与 Worker 相同的 ≥32 字符随机串>"
 ticket_ttl_minutes = 10
 session_ttl_minutes = 120
 ```
 
-注意：`base_url` 指向 Pages 根域名、不带斜杠（Pages 站点根即页面）；本地部署时才使用
-`http://127.0.0.1:18765/player` 这类带路径的地址。保存配置（后台设置页或重启插件）后，
-在群里发送 `主页` 验证：链接应打开 Pages 页面并成功换取会话。
+保存配置后在群里发送 `主页` 验证：链接指向 Pages 并携带 `?token=`，页面应显示已推送的
+档案快照；「更换形象」应成功并同步回群内卡片。本地直连模式（不配 `sync_url`）保持原有
+票据流程不变。
 
 安全清单：
 
+- `PLUGIN_TOKEN` 走 `wrangler secret put`，绝不写进仓库、前端或日志。
+- `PLUGIN_URL` 只存在于 Worker 环境变量（对玩家不可见），必须 HTTPS、无路径无查询。
+- Worker 转发只允许固定路径；所有 SQL 预编译；所有令牌常量时间比较。
+- 含 `token`/`ticket` 的链接等同钥匙，不要转发到群聊之外。
 - 管理 Token 与数据库只存在于插件服务器，绝不写入任何前端配置。
-- `allowed_origins` 只填确切的 Pages 域名（含 `https://`，不带斜杠）。
-- 反向代理必须强制 HTTPS；含 `ticket` 的链接等同钥匙，不要转发到群聊之外。
-- 自定义域名变更时，同步更新 `base_url`、`allowed_origins` 并重新构建页面（`VITE_API_BASE`）。
 
 未注册、待选体系和已停用角色会分别收到明确提示。任何普通玩法命令都不会隐式创建玩家，
 未知文本也不会写入数据库。
