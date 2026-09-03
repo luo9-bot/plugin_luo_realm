@@ -897,7 +897,7 @@ fn update_skill(body: &[u8], state: &AdminState, skill_id: &str) -> HttpResponse
         Ok(request) => request,
         Err(response) => return response,
     };
-    if request.definition.id != skill_id
+    if request.definition.id.as_str() != skill_id
         || !valid_code(skill_id)
         || request.definition.name.trim().is_empty()
         || !valid_reason(&request.reason)

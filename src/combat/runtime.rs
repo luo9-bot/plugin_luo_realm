@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::prelude::*;
 
+use crate::domain::shared::{CombatantId, PlatformUserId, SkillId, SystemId};
+
 use super::{
     ACTION_THRESHOLD, BASIS_POINTS, BattleEndReason, CombatError, CombatEvent, CombatEventKind,
     CombatOutcome, CombatSnapshot, CombatantOutcome, DamageType, EquipmentTrigger, ResourceKind,
@@ -13,11 +15,11 @@ use super::{
 #[allow(dead_code)]
 #[derive(Component)]
 struct Identity {
-    id: String,
+    id: CombatantId,
     name: String,
     character_id: String,
-    system_id: String,
-    player_id: Option<u64>,
+    system_id: SystemId,
+    platform_user_id: Option<PlatformUserId>,
     team: u8,
 }
 
@@ -62,7 +64,7 @@ struct Loadout {
 }
 
 #[derive(Component, Default)]
-struct Cooldowns(HashMap<String, u32>);
+struct Cooldowns(HashMap<SkillId, u32>);
 
 #[derive(Component)]
 struct Tactics(Tactic);
@@ -120,7 +122,7 @@ struct OngoingEffect {
 struct DomainEffect {
     owner: Entity,
     team: u8,
-    skill_id: String,
+    skill_id: SkillId,
     strength: i64,
     expires_at: u32,
 }
@@ -250,7 +252,7 @@ fn build_world(snapshot: &CombatSnapshot) -> World {
                     name: combatant.display_name.clone(),
                     character_id: combatant.character_id.clone(),
                     system_id: combatant.system_id.clone(),
-                    player_id: combatant.player_id,
+                    platform_user_id: combatant.platform_user_id,
                     team: combatant.team,
                 },
                 Unit {
@@ -565,7 +567,7 @@ fn choose_action(world: &mut World, actor: Entity) -> Option<(SkillDefinition, E
         let target = target_for_basic_attack(world, actor, team)?;
         Some((
             SkillDefinition {
-                id: "basic_attack".into(),
+                id: SkillId::new("basic_attack"),
                 name: "普通攻击".into(),
                 system_id: world.get::<Identity>(actor)?.system_id.clone(),
                 category: super::SkillCategory::Active,
@@ -1476,10 +1478,10 @@ fn summon(
         .unwrap_or(0);
     let tick = world.resource::<Clock>().tick;
     let summon_index = world.entities().len();
-    let summon_id = format!("{source_id}:{definition_id}:{summon_index}");
+    let summon_id = CombatantId::new(format!("{source_id}:{definition_id}:{summon_index}"));
     let summon_name = format!("{source_name}的契灵");
     let basic_skill = SkillDefinition {
-        id: format!("{definition_id}.attack"),
+        id: SkillId::new(format!("{definition_id}.attack")),
         name: "契灵扑击".into(),
         system_id: system_id.clone(),
         category: super::SkillCategory::Active,
@@ -1509,7 +1511,7 @@ fn summon(
                 name: summon_name.clone(),
                 character_id: definition_id.into(),
                 system_id,
-                player_id: None,
+                platform_user_id: None,
                 team,
             },
             Unit {
@@ -1578,7 +1580,7 @@ fn establish_domain(world: &mut World, source: Entity, strength: i64, duration: 
         .get::<Loadout>(source)
         .and_then(|loadout| loadout.domain.as_ref())
         .map(|skill| skill.id.clone())
-        .unwrap_or_else(|| "domain".into());
+        .unwrap_or_else(|| SkillId::new("domain"));
     let domains = {
         let mut query = world.query::<(Entity, &DomainEffect)>();
         query
@@ -1886,9 +1888,9 @@ fn emit(
     });
 }
 
-fn identity_id(world: &World, entity: Entity) -> String {
+fn identity_id(world: &World, entity: Entity) -> CombatantId {
     world
         .get::<Identity>(entity)
         .map(|identity| identity.id.clone())
-        .unwrap_or_else(|| format!("entity:{}", entity.to_bits()))
+        .unwrap_or_else(|| CombatantId::new(format!("entity:{}", entity.to_bits())))
 }

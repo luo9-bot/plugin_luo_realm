@@ -203,7 +203,7 @@ fn side_view(combatant: &CombatantSnapshot, theme: Theme) -> SideView {
 
 fn locate_side(snapshot: &CombatSnapshot, left_team: u8, id: &str) -> Option<usize> {
     snapshot.combatants.iter().find_map(|combatant| {
-        if combatant.combatant_id == id {
+        if combatant.combatant_id.as_str() == id {
             Some(if combatant.team == left_team { 0 } else { 1 })
         } else {
             None

@@ -9,6 +9,7 @@ use crate::{
     config::{CommandConfig, GameConfig, GameplayConfig, RuntimeConfig},
     core::{Player, stable_seed},
     database::{self, Database, DatabaseError},
+    domain::shared::GroupId,
     engine, identity, render,
 };
 
@@ -720,7 +721,7 @@ fn duel(
     }
     let result = combat::run_battle(&snapshot)
         .map_err(|error| DatabaseError::InvalidData(error.to_string()))?;
-    database::combat::record_battle(&transaction, group_id, &snapshot, &result)?;
+    database::combat::record_battle(&transaction, GroupId::new(group_id), &snapshot, &result)?;
     let event_completed = database::world_event::contribute_many(
         &transaction,
         group_id,

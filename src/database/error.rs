@@ -1,5 +1,7 @@
 use rusqlite::{Error, ErrorCode};
 
+use crate::domain::error_code::StableErrorCode;
+
 #[derive(Debug, thiserror::Error)]
 pub enum DatabaseError {
     #[error("database unavailable: {0}")]
@@ -37,6 +39,22 @@ impl DatabaseError {
                 Self::Constraint(error)
             }
             _ => Self::Unavailable(error),
+        }
+    }
+}
+
+impl StableErrorCode for DatabaseError {
+    fn error_code(&self) -> &'static str {
+        match self {
+            Self::Unavailable(_) => "database.unavailable",
+            Self::Busy => "database.busy",
+            Self::Constraint(_) => "database.constraint_violation",
+            Self::NotFound => "database.not_found",
+            Self::InsufficientBalance => "database.insufficient_balance",
+            Self::Corrupt(_) => "database.corrupt",
+            Self::Migration(_) => "database.migration_failed",
+            Self::InvalidIdentifier => "database.invalid_identifier",
+            Self::InvalidData(_) => "database.invalid_data",
         }
     }
 }

@@ -3,13 +3,14 @@ use rusqlite::{Transaction, params};
 use crate::{
     combat::{CombatOutcome, CombatSnapshot},
     database::activity,
+    domain::shared::GroupId,
 };
 
 use super::{DatabaseError, DatabaseResult, player_id, unix_timestamp, wallet};
 
 pub fn record_battle(
     transaction: &Transaction<'_>,
-    group_id: u64,
+    group_id: GroupId,
     snapshot: &CombatSnapshot,
     outcome: &CombatOutcome,
 ) -> DatabaseResult<i64> {
@@ -26,9 +27,9 @@ pub fn record_battle(
                  started_at, finished_at
              ) VALUES('duel', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
             params![
-                player_id(group_id)?,
+                player_id(group_id.value())?,
                 snapshot.seed.to_string(),
-                snapshot.rule_version,
+                snapshot.rule_version.value(),
                 outcome.winner_team,
                 format!("{:?}", outcome.end_reason).to_ascii_lowercase(),
                 outcome.elapsed_ticks,
@@ -42,8 +43,12 @@ pub fn record_battle(
     snapshot
         .combatants
         .iter()
-        .filter_map(|combatant| combatant.player_id.map(|player_id| (player_id, combatant)))
-        .try_for_each(|(player_id_value, combatant)| {
+        .filter_map(|combatant| {
+            combatant
+                .platform_user_id
+                .map(|platform_user_id| (platform_user_id, combatant))
+        })
+        .try_for_each(|(platform_user_id, combatant)| {
             let health = outcome
                 .combatants
                 .iter()
@@ -58,12 +63,12 @@ pub fn record_battle(
                      ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
                         combat_id,
-                        player_id(player_id_value)?,
+                        player_id(platform_user_id.value())?,
                         combatant.team,
-                        combatant.combatant_id,
-                        combatant.system_id,
+                        combatant.combatant_id.as_str(),
+                        combatant.system_id.as_str(),
                         combatant.universal_tier,
-                        combatant.power,
+                        combatant.power.value(),
                         combatant.attributes.max_health,
                         health,
                     ],
@@ -87,9 +92,10 @@ pub fn record_battle(
         .combatants
         .iter()
         .filter(|combatant| combatant.team == outcome.winner_team)
-        .filter_map(|combatant| combatant.player_id);
+        .filter_map(|combatant| combatant.platform_user_id);
     winners
-        .map(|user_id| {
+        .map(|platform_user_id| {
+            let user_id = platform_user_id.value();
             wallet::credit(
                 transaction,
                 user_id,
@@ -105,7 +111,9 @@ pub fn record_battle(
         .combatants
         .iter()
         .filter(|combatant| combatant.team != outcome.winner_team)
-        .filter_map(|combatant| combatant.player_id)
-        .try_for_each(|user_id| activity::increment_statistic(transaction, user_id, "losses", 1))?;
+        .filter_map(|combatant| combatant.platform_user_id)
+        .try_for_each(|platform_user_id| {
+            activity::increment_statistic(transaction, platform_user_id.value(), "losses", 1)
+        })?;
     Ok(combat_id)
 }

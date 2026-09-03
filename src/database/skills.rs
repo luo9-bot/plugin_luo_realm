@@ -107,7 +107,13 @@ pub fn upsert_config(
              VALUES(?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(skill_id) DO UPDATE SET definition_json=excluded.definition_json,
                  visual_json=excluded.visual_json, enabled=excluded.enabled, updated_at=excluded.updated_at",
-            params![definition.id, definition_json, visual_json, enabled, unix_timestamp()],
+            params![
+                definition.id.as_str(),
+                definition_json,
+                visual_json,
+                enabled,
+                unix_timestamp()
+            ],
         )
         .map_err(DatabaseError::from_sqlite)?;
     Ok(())
@@ -163,7 +169,7 @@ pub fn ensure_unlocked(
                     "INSERT OR IGNORE INTO player_skills(
                          player_id, skill_id, mastery, acquired_at
                      ) VALUES(?1, ?2, 0, ?3)",
-                    params![id, skill.id, unix_timestamp()],
+                    params![id, skill.id.as_str(), unix_timestamp()],
                 )
                 .map_err(DatabaseError::from_sqlite)?;
             Ok(())
@@ -299,7 +305,7 @@ pub fn configure(
             "SELECT EXISTS(
                  SELECT 1 FROM player_skills WHERE player_id=?1 AND skill_id=?2
              )",
-            params![id, definition.id],
+            params![id, definition.id.as_str()],
             |row| row.get::<_, bool>(0),
         )
         .map_err(DatabaseError::from_sqlite)?;
@@ -309,7 +315,7 @@ pub fn configure(
     transaction
         .execute(
             "DELETE FROM player_skill_loadouts WHERE player_id=?1 AND skill_id=?2",
-            params![id, definition.id],
+            params![id, definition.id.as_str()],
         )
         .map_err(DatabaseError::from_sqlite)?;
     transaction
@@ -318,7 +324,7 @@ pub fn configure(
              VALUES(?1, ?2, ?3, ?4)
              ON CONFLICT(player_id, slot_type, slot_index) DO UPDATE SET
                  skill_id=excluded.skill_id",
-            params![id, slot_type, slot_index, definition.id],
+            params![id, slot_type, slot_index, definition.id.as_str()],
         )
         .map_err(DatabaseError::from_sqlite)?;
     Ok(())
@@ -386,7 +392,7 @@ fn ensure_default_loadout(
                     "INSERT OR IGNORE INTO player_skill_loadouts(
                          player_id, slot_type, slot_index, skill_id
                      ) VALUES(?1, ?2, ?3, ?4)",
-                    params![id, slot_type, index, skill.id],
+                    params![id, slot_type, index, skill.id.as_str()],
                 )
                 .map_err(DatabaseError::from_sqlite)?;
             Ok(())

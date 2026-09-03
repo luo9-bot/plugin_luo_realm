@@ -5,6 +5,7 @@ pub mod config;
 pub mod core;
 pub mod cultivation;
 pub mod database;
+pub mod domain;
 pub mod engine;
 pub mod equipment;
 pub mod game;

@@ -1,5 +1,4 @@
 //! battle.rs 的本地验证测试：生成示例 GIF 到 %TEMP%\battle_test。
-//! 本文件被 .gitignore 排除，禁止提交。
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -9,6 +8,7 @@ use crate::combat::{
     CombatSnapshot, CombatantOutcome, CombatantSnapshot, DamageType, ResourceKind,
     ResourceSnapshot, SkillTag, default_loadout, run_battle,
 };
+use crate::domain::shared::{CombatantId, PowerScore, RuleVersion, SkillId, SystemId};
 use crate::render;
 use image::{ImageBuffer, Rgba};
 
@@ -23,11 +23,11 @@ fn combatant(
     crit: i64,
 ) -> CombatantSnapshot {
     CombatantSnapshot {
-        combatant_id: id.into(),
-        player_id: None,
+        combatant_id: CombatantId::new(id),
+        platform_user_id: None,
         display_name: name.into(),
         character_id: "default".into(),
-        system_id: system.into(),
+        system_id: SystemId::new(system),
         universal_tier: 3,
         team,
         position: team as i32,
@@ -56,7 +56,7 @@ fn combatant(
         domain_skill: None,
         equipment_triggers: Vec::new(),
         tactic: crate::combat::Tactic::Aggressive,
-        power: 9_000,
+        power: PowerScore::saturating_new(9_000),
     }
 }
 
@@ -72,7 +72,7 @@ fn snapshot() -> CombatSnapshot {
     right.passive_skills = passive;
     right.domain_skill = domain;
     CombatSnapshot {
-        rule_version: 1,
+        rule_version: RuleVersion::INITIAL,
         seed: 20240601,
         rules: BattleRules::default(),
         combatants: vec![left, right],
@@ -89,8 +89,8 @@ fn event(
     CombatEvent {
         sequence,
         tick,
-        source_id: source.map(str::to_string),
-        target_id: target.map(str::to_string),
+        source_id: source.map(CombatantId::new),
+        target_id: target.map(CombatantId::new),
         trigger_chain: 0,
         kind,
     }
@@ -105,7 +105,7 @@ fn scripted_outcome() -> CombatOutcome {
             Some("A"),
             Some("B"),
             CombatEventKind::SkillCast {
-                skill_id: "s1".into(),
+                skill_id: SkillId::new("s1"),
                 skill_name: "暗影突袭".into(),
                 tags: vec![SkillTag::Attack],
             },
@@ -127,7 +127,7 @@ fn scripted_outcome() -> CombatOutcome {
             Some("B"),
             Some("A"),
             CombatEventKind::SkillCast {
-                skill_id: "s2".into(),
+                skill_id: SkillId::new("s2"),
                 skill_name: "冰霜结晶".into(),
                 tags: vec![SkillTag::Attack],
             },
@@ -149,7 +149,7 @@ fn scripted_outcome() -> CombatOutcome {
             Some("A"),
             Some("B"),
             CombatEventKind::SkillCast {
-                skill_id: "s3".into(),
+                skill_id: SkillId::new("s3"),
                 skill_name: "月影斩".into(),
                 tags: vec![SkillTag::Attack],
             },
@@ -171,7 +171,7 @@ fn scripted_outcome() -> CombatOutcome {
             Some("B"),
             Some("A"),
             CombatEventKind::SkillCast {
-                skill_id: "s4".into(),
+                skill_id: SkillId::new("s4"),
                 skill_name: "寒霜爆".into(),
                 tags: vec![SkillTag::Attack],
             },
@@ -183,7 +183,7 @@ fn scripted_outcome() -> CombatOutcome {
             Some("B"),
             None,
             CombatEventKind::PassiveTriggered {
-                definition_id: "p1".into(),
+                definition_id: SkillId::new("p1"),
                 name: "寒霜共鸣".into(),
             },
         ),
@@ -193,7 +193,7 @@ fn scripted_outcome() -> CombatOutcome {
             Some("B"),
             Some("A"),
             CombatEventKind::SkillCast {
-                skill_id: "s5".into(),
+                skill_id: SkillId::new("s5"),
                 skill_name: "极冰裂".into(),
                 tags: vec![SkillTag::Attack],
             },
@@ -229,7 +229,7 @@ fn scripted_outcome() -> CombatOutcome {
             Some("A"),
             Some("B"),
             CombatEventKind::SkillCast {
-                skill_id: "s6".into(),
+                skill_id: SkillId::new("s6"),
                 skill_name: "夜刃风暴".into(),
                 tags: vec![SkillTag::Attack],
             },
@@ -251,7 +251,7 @@ fn scripted_outcome() -> CombatOutcome {
             Some("A"),
             Some("B"),
             CombatEventKind::SkillCast {
-                skill_id: "s7".into(),
+                skill_id: SkillId::new("s7"),
                 skill_name: "幽冥刺".into(),
                 tags: vec![SkillTag::Attack],
             },
@@ -286,7 +286,7 @@ fn scripted_outcome() -> CombatOutcome {
         events,
         combatants: vec![
             CombatantOutcome {
-                combatant_id: "A".into(),
+                combatant_id: CombatantId::new("A"),
                 team: 0,
                 health: 817,
                 max_health: 1000,
@@ -295,7 +295,7 @@ fn scripted_outcome() -> CombatOutcome {
                 defeated: false,
             },
             CombatantOutcome {
-                combatant_id: "B".into(),
+                combatant_id: CombatantId::new("B"),
                 team: 1,
                 health: 0,
                 max_health: 1000,

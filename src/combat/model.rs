@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-pub const BASIS_POINTS: i64 = 10_000;
+use crate::domain::error_code::StableErrorCode;
+use crate::domain::shared::{
+    BasisPoints, CombatantId, PlatformUserId, PowerScore, RuleVersion, SkillId, SystemId,
+};
+
+pub const BASIS_POINTS: i64 = BasisPoints::SCALE;
 pub const ACTION_THRESHOLD: i64 = 10_000;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -178,9 +183,9 @@ pub enum StatusKind {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SkillDefinition {
-    pub id: String,
+    pub id: SkillId,
     pub name: String,
-    pub system_id: String,
+    pub system_id: SystemId,
     pub category: SkillCategory,
     pub unlock_tier: u8,
     pub action_cost: i64,
@@ -310,11 +315,12 @@ pub struct EquipmentTrigger {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CombatantSnapshot {
-    pub combatant_id: String,
-    pub player_id: Option<u64>,
+    pub combatant_id: CombatantId,
+    /// 平台用户号（QQ 号）；NPC、召唤物等无平台身份的单位为空。
+    pub platform_user_id: Option<PlatformUserId>,
     pub display_name: String,
     pub character_id: String,
-    pub system_id: String,
+    pub system_id: SystemId,
     pub universal_tier: u8,
     pub team: u8,
     pub position: i32,
@@ -325,7 +331,7 @@ pub struct CombatantSnapshot {
     pub domain_skill: Option<SkillDefinition>,
     pub equipment_triggers: Vec<EquipmentTrigger>,
     pub tactic: Tactic,
-    pub power: i64,
+    pub power: PowerScore,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -347,7 +353,7 @@ impl Default for BattleRules {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CombatSnapshot {
-    pub rule_version: u32,
+    pub rule_version: RuleVersion,
     pub seed: u64,
     pub rules: BattleRules,
     pub combatants: Vec<CombatantSnapshot>,
@@ -357,8 +363,8 @@ pub struct CombatSnapshot {
 pub struct CombatEvent {
     pub sequence: u64,
     pub tick: u32,
-    pub source_id: Option<String>,
-    pub target_id: Option<String>,
+    pub source_id: Option<CombatantId>,
+    pub target_id: Option<CombatantId>,
     pub trigger_chain: u64,
     pub kind: CombatEventKind,
 }
@@ -368,14 +374,14 @@ pub struct CombatEvent {
 pub enum CombatEventKind {
     BattleStarted,
     ActionPrepared {
-        skill_id: String,
+        skill_id: SkillId,
         skill_name: String,
     },
     ActionInterrupted {
         skill_name: String,
     },
     SkillCast {
-        skill_id: String,
+        skill_id: SkillId,
         skill_name: String,
         tags: Vec<SkillTag>,
     },
@@ -421,15 +427,15 @@ pub enum CombatEventKind {
     },
     EntityDefeated,
     DomainEstablished {
-        skill_id: String,
+        skill_id: SkillId,
         strength: i64,
     },
     DomainContested {
-        winner_id: String,
+        winner_id: CombatantId,
     },
     DomainCollapsed,
     PassiveTriggered {
-        definition_id: String,
+        definition_id: SkillId,
         name: String,
     },
     EquipmentTriggered {
@@ -452,7 +458,7 @@ pub enum BattleEndReason {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CombatantOutcome {
-    pub combatant_id: String,
+    pub combatant_id: CombatantId,
     pub team: u8,
     pub health: i64,
     pub max_health: i64,
@@ -476,11 +482,23 @@ pub enum CombatError {
     #[error("战斗至少需要两个阵营")]
     MissingTeams,
     #[error("战斗单位标识重复：{0}")]
-    DuplicateCombatant(String),
+    DuplicateCombatant(CombatantId),
     #[error("战斗单位没有可用主动技能：{0}")]
-    EmptyLoadout(String),
+    EmptyLoadout(CombatantId),
     #[error("战斗规则无效：{0}")]
     InvalidRules(String),
     #[error("战斗运行时状态错误：{0}")]
     InvalidState(String),
+}
+
+impl StableErrorCode for CombatError {
+    fn error_code(&self) -> &'static str {
+        match self {
+            Self::MissingTeams => "combat.missing_teams",
+            Self::DuplicateCombatant(_) => "combat.duplicate_combatant",
+            Self::EmptyLoadout(_) => "combat.empty_loadout",
+            Self::InvalidRules(_) => "combat.invalid_rules",
+            Self::InvalidState(_) => "combat.invalid_state",
+        }
+    }
 }

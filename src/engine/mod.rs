@@ -2,6 +2,7 @@ use crate::{
     combat::{self, CombatAttributes, CombatSnapshot, CombatantSnapshot, ResourceSnapshot},
     core::Player,
     cultivation::{AttributeModifier, CultivationContext, registered_systems},
+    domain::shared::{CombatantId, PlatformUserId, PowerScore, RuleVersion, SystemId},
     equipment,
 };
 
@@ -136,7 +137,7 @@ pub fn build_combat_snapshot(
     let left_snapshot = build_combatant_snapshot(left, 0, 0, date);
     let right_snapshot = build_combatant_snapshot(right, 1, 1, date);
     CombatSnapshot {
-        rule_version: 1,
+        rule_version: RuleVersion::INITIAL,
         seed,
         rules: combat::BattleRules::default(),
         combatants: vec![left_snapshot, right_snapshot],
@@ -187,11 +188,11 @@ fn build_combatant_snapshot(
     equipment::apply_to_attributes(&mut attributes, &bonuses);
     let (active, passive, domain) = combat::default_loadout(&cultivation.system_id, tier);
     CombatantSnapshot {
-        combatant_id: player.user_id.clone(),
-        player_id: player.user_id.parse().ok(),
+        combatant_id: CombatantId::new(player.user_id.clone()),
+        platform_user_id: player.user_id.parse::<u64>().ok().map(PlatformUserId::new),
         display_name: player.display_name.clone(),
         character_id: player.character_id.clone(),
-        system_id: cultivation.system_id.clone(),
+        system_id: SystemId::new(cultivation.system_id.clone()),
         universal_tier: tier,
         team,
         position,
@@ -208,7 +209,7 @@ fn build_combatant_snapshot(
         domain_skill: domain,
         equipment_triggers: bonuses.triggers,
         tactic: combat::Tactic::Balanced,
-        power: profile.power.round() as i64,
+        power: PowerScore::saturating_new(profile.power.round() as i64),
     }
 }
 

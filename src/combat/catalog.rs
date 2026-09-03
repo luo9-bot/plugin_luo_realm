@@ -2,6 +2,7 @@ use super::{
     DamageType, ResourceKind, SkillCategory, SkillDefinition, SkillEffect, SkillTag, StatusKind,
     TargetRule,
 };
+use crate::domain::shared::{SkillId, SystemId};
 
 const SYSTEM_IDS: [&str; 11] = [
     "orthodox",
@@ -68,7 +69,7 @@ pub fn skill_by_id(skill_id: &str) -> Option<SkillDefinition> {
     SYSTEM_IDS
         .into_iter()
         .flat_map(skills_for_system)
-        .find(|skill| skill.id == skill_id)
+        .find(|skill| skill.id.as_str() == skill_id)
 }
 
 pub fn default_loadout(
@@ -235,9 +236,9 @@ fn active_skill(
     tags: Vec<SkillTag>,
 ) -> SkillDefinition {
     SkillDefinition {
-        id: format!("{}.{}", profile.id, suffix),
+        id: SkillId::new(format!("{}.{}", profile.id, suffix)),
         name: name.into(),
-        system_id: profile.id.into(),
+        system_id: SystemId::new(profile.id),
         category: SkillCategory::Active,
         unlock_tier,
         action_cost,
@@ -266,9 +267,9 @@ fn passive_skill(
     unlock_tier: u8,
 ) -> SkillDefinition {
     SkillDefinition {
-        id: format!("{}.{}", profile.id, suffix),
+        id: SkillId::new(format!("{}.{}", profile.id, suffix)),
         name: name.into(),
-        system_id: profile.id.into(),
+        system_id: SystemId::new(profile.id),
         category: SkillCategory::Passive,
         unlock_tier,
         action_cost: 0,
@@ -290,9 +291,9 @@ fn passive_skill(
 
 fn domain_skill(profile: &SystemSkills, name: &str) -> SkillDefinition {
     SkillDefinition {
-        id: format!("{}.domain", profile.id),
+        id: SkillId::new(format!("{}.domain", profile.id)),
         name: name.into(),
-        system_id: profile.id.into(),
+        system_id: SystemId::new(profile.id),
         category: SkillCategory::Domain,
         unlock_tier: 3,
         action_cost: 15_000,
